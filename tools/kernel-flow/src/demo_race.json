@@ -1,0 +1,6 @@
+{
+ "id": "bug-race",
+ "title": "Demo · neighbour read, no barrier",
+ "code": "comptime TPB = 4\ncomptime SIZE = 8\ncomptime BLOCKS_PER_GRID = (2, 1)\ncomptime THREADS_PER_BLOCK = (TPB, 1)\ncomptime dtype = DType.float32\ncomptime layout = row_major[SIZE]()\ncomptime LayoutType = type_of(layout)\n\n\n# Each thread reads its right neighbour's shared slot.\n# Toggle the barrier() line to see the race appear and disappear.\ndef rotate_shared[\n    Engine: TensorEngine,\n](\n    output: TileTensor[mut=True, dtype, LayoutType, MutAnyOrigin, Engine=Engine],\n    a: TileTensor[mut=False, dtype, LayoutType, ImmutAnyOrigin, Engine=Engine],\n    size_dev: Int32,\n) where (Engine.element_size == 1):\n    var size = Int(size_dev)\n    var shared = stack_allocation[dtype=dtype, address_space=.SHARED](\n        row_major[TPB]()\n    )\n    var global_i = block_dim.x * block_idx.x + thread_idx.x\n    var local_i = thread_idx.x\n    if global_i < size:\n        shared[local_i] = a[global_i] * 2.0\n    # barrier()\n    if global_i < size:\n        var neighbour = (local_i + 1) % TPB\n        output[global_i] = shared[neighbour]\n",
+ "launch": "grid  = BLOCKS_PER_GRID\nblock = THREADS_PER_BLOCK\noutput = zeros(SIZE)\na = arange(SIZE)\nsize_dev = SIZE\nexpect output = [2, 4, 6, 0, 10, 12, 14, 8]"
+}
