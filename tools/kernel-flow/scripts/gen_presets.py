@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Rebuild index.html from src/. Presets are regenerated from the solved puzzles in problems/."""
+"""Regenerate src/presets.json from the solved puzzles in problems/."""
 import json, re
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent.parent
-SRC = HERE / "src"
+ROOT = HERE.parent.parent.parent
+SRC = HERE.parent / "src"
 
 def anchor(path):
     src = (ROOT / "problems" / path).read_text()
@@ -29,21 +29,14 @@ PRESETS = [
 def main():
     presets = [dict(id=i, title=t, code=anchor(f), launch=l) for i, t, f, l in PRESETS]
     p03 = presets[2]
-    presets.append(dict(id="bug-guard", title="Demo · p03 without a guard",
+    presets.append(dict(id="bug-guard", title="Demo · missing bounds guard",
         code=p03["code"].replace("    if i < size:\n        output[unsafe_offset=i] = a[unsafe_offset=i] + 10.0",
                                  "    output[unsafe_offset=i] = a[unsafe_offset=i] + 10.0"),
         launch=p03["launch"]))
-    presets.append(json.loads((SRC / "demo_race.json").read_text()))
-    js_presets = "const PRESETS = " + json.dumps(presets, indent=1, ensure_ascii=False) + ';\nif (typeof module !== "undefined") module.exports = PRESETS;\n'
-    (SRC / "presets.js").write_text(js_presets)
-    js = js_presets + "\n" + (SRC / "engine.js").read_text() + "\n" + (SRC / "ui.js").read_text()
-    shell = (SRC / "shell.html").read_text()
-    html = ('<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
-            '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n'
-            '<style>:root{color-scheme:light}body{margin:0}[hidden]{display:none!important}</style>\n'
-            '</head>\n<body>\n' + shell + "\n<script>\n" + js + "\n</script>\n</body>\n</html>\n")
-    (HERE / "index.html").write_text(html)
-    print("wrote", HERE / "index.html")
+    presets.append(json.loads((HERE / "demo_race.json").read_text()))
+    (SRC / "presets.json").write_text(json.dumps(presets, indent=1, ensure_ascii=False) + "\n")
+    print("wrote", SRC / "presets.json", len(presets), "presets")
+
 
 if __name__ == "__main__":
     main()

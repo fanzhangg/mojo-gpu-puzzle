@@ -1,0 +1,146 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* shadcn/ui zinc tokens + Kernel Flow semantic tokens (read / write / wait / masked).
+   Light values on :root; dark values for the OS setting and for an explicit data-theme="dark". */
+@layer base {
+  :root {
+    --background: 240 10% 98%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+    --primary: 240 5.9% 10%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 42%;
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+    --destructive: 0 72% 46%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 240 5.9% 10%;
+    --radius: 0.5rem;
+    --read: 204 80% 40%;
+    --read-soft: 204 85% 94%;
+    --write: 22 90% 47%;
+    --write-soft: 24 95% 92%;
+    --write-foreground: 0 0% 100%;
+    --wait: 40 95% 36%;
+    --wait-soft: 44 90% 90%;
+    --masked: 240 4% 55%;
+    --masked-soft: 240 5% 93%;
+    --ok: 148 55% 32%;
+    --ok-soft: 145 50% 91%;
+    --run: 252 70% 55%;
+    --run-soft: 252 90% 95%;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --background: 240 10% 4.5%;
+      --foreground: 0 0% 96%;
+      --card: 240 8% 7.5%;
+      --card-foreground: 0 0% 96%;
+      --popover: 240 8% 8%;
+      --popover-foreground: 0 0% 96%;
+      --primary: 0 0% 96%;
+      --primary-foreground: 240 5.9% 10%;
+      --secondary: 240 3.7% 15.9%;
+      --secondary-foreground: 0 0% 98%;
+      --muted: 240 3.7% 14%;
+      --muted-foreground: 240 5% 66%;
+      --accent: 240 3.7% 15.9%;
+      --accent-foreground: 0 0% 98%;
+      --destructive: 0 75% 62%;
+      --destructive-foreground: 0 0% 98%;
+      --border: 240 3.7% 17%;
+      --input: 240 3.7% 20%;
+      --ring: 240 4.9% 83.9%;
+      --read: 204 85% 64%;
+      --read-soft: 206 60% 17%;
+      --write: 24 100% 62%;
+      --write-soft: 22 60% 17%;
+      --write-foreground: 240 10% 6%;
+      --wait: 42 85% 58%;
+      --wait-soft: 42 55% 15%;
+      --masked: 240 4% 52%;
+      --masked-soft: 240 4% 13%;
+      --ok: 146 55% 58%;
+      --ok-soft: 148 40% 14%;
+      --run: 252 90% 76%;
+      --run-soft: 252 40% 19%;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --background: 240 10% 4.5%;
+    --foreground: 0 0% 96%;
+    --card: 240 8% 7.5%;
+    --card-foreground: 0 0% 96%;
+    --popover: 240 8% 8%;
+    --popover-foreground: 0 0% 96%;
+    --primary: 0 0% 96%;
+    --primary-foreground: 240 5.9% 10%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 14%;
+    --muted-foreground: 240 5% 66%;
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 75% 62%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 3.7% 17%;
+    --input: 240 3.7% 20%;
+    --ring: 240 4.9% 83.9%;
+    --read: 204 85% 64%;
+    --read-soft: 206 60% 17%;
+    --write: 24 100% 62%;
+    --write-soft: 22 60% 17%;
+    --write-foreground: 240 10% 6%;
+    --wait: 42 85% 58%;
+    --wait-soft: 42 55% 15%;
+    --masked: 240 4% 52%;
+    --masked-soft: 240 4% 13%;
+    --ok: 146 55% 58%;
+    --ok-soft: 148 40% 14%;
+    --run: 252 90% 76%;
+    --run-soft: 252 40% 19%;
+    color-scheme: dark;
+  }
+  * { @apply border-border; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    margin: 0;
+    font-size: 14px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 16px 40px;
+    font-feature-settings: "cv11", "ss01";
+  }
+  [hidden] { display: none !important; }
+  code, kbd, pre { @apply font-mono; }
+}
+
+@layer components {
+  .tok-kw { color: hsl(var(--run)); }
+  .tok-bi { color: hsl(var(--read)); }
+  .tok-num { color: hsl(var(--write)); }
+  .tok-cm { @apply text-muted-foreground italic; }
+  .tok-str { color: hsl(var(--ok)); }
+  .wire { fill: none; stroke-width: 1.6; }
+  .wire-r { stroke: hsl(var(--read)); }
+  .wire-w { stroke: hsl(var(--write)); stroke-width: 2.1; }
+  .wire-dim { opacity: 0.1; }
+  .hatch { background-image: repeating-linear-gradient(135deg, hsl(var(--wait) / 0.28) 0 4px, transparent 4px 8px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

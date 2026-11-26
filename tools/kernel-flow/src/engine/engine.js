@@ -450,6 +450,11 @@ function fmtNum(n) {
 // ---------- Evaluator ----------
 // ctx: { lookup(name), thread?, onRead, allocShared, comptime }
 function evalExpr(e, C) {
+  const v = evalExpr0(e, C);
+  if (C.cap) C.cap.set(e, v);
+  return v;
+}
+function evalExpr0(e, C) {
   switch (e.k) {
     case 'num': return e.v;
     case 'str': return e.v;
@@ -620,6 +625,90 @@ function callValue(f, args, C, node) {
     }
   }
   throw new Error(`${n}() is not supported in this visualizer`);
+}
+
+// ---------- Substituted expression rendering ----------
+const OPSYM = { '*': '×', '/': '/', '//': '//', '%': '%', '+': '+', '-': '−', '**': '**', '<': '<', '>': '>', '<=': '≤', '>=': '≥', '==': '==', '!=': '≠', '<<': '<<', '>>': '>>', '&': '&', '|': '|', '^': '^' };
+const PREC = { '|': 5, '^': 6, '&': 7, '<<': 8, '>>': 8, '+': 9, '-': 9, '*': 10, '/': 10, '//': 10, '%': 10, '**': 12 };
+const IDENTITY_CALLS = new Set([...INT_CASTS, ...FLOAT_CASTS, 'Scalar', 'SIMD', 'rebind', 'type_of', 'Bool']);
+function nodePrec(n) {
+  switch (n.k) {
+    case 'tern': return 0;
+    case 'bool': return n.op === 'or' ? 1 : 2;
+    case 'not': return 3;
+    case 'cmp': return 4;
+    case 'bin': return PREC[n.op];
+    case 'un': return 11;
+  }
+  return 99;
+}
+function calleeName(f) {
+  if (f.k === 'name') return f.v;
+  if (f.k === 'sub') return calleeName(f.base);
+  if (f.k === 'attr') return calleeName(f.base) + '.' + f.name;
+  return '?';
+}
+function attrText(n) { return n.k === 'attr' ? attrText(n.base) + '.' + n.name : n.k === 'name' ? n.v : '…'; }
+function isScalar(v) { return typeof v === 'number' || typeof v === 'boolean'; }
+// Renders an expression with every variable replaced by its value in this step.
+// Segments: {k:'v'} value, {k:'op'} operator, {k:'p'} punctuation, {k:'name'}, {k:'mem', s, val, buf}
+function substSegs(e, cap, asTarget) {
+  const out = [];
+  const push = (k, s, extra) => out.push(Object.assign({ k, s }, extra));
+  const wrap = (child, parentP, right) => {
+    const p = nodePrec(child);
+    const need = p < parentP || (right && p === parentP && p < 99);
+    if (need) push('p', '(');
+    walk(child);
+    if (need) push('p', ')');
+  };
+  function walk(n) {
+    switch (n.k) {
+      case 'num': push('v', n.f && Number.isInteger(n.v) ? n.v + '.0' : String(n.v)); return;
+      case 'str': push('v', JSON.stringify(n.v)); return;
+      case 'const': push('v', n.v === true ? 'True' : n.v === false ? 'False' : 'None'); return;
+      case 'sym': push('name', n.v); return;
+      case 'name': case 'attr': {
+        const v = cap && cap.get(n);
+        if (isScalar(v)) push('v', showV(v), { src: n.k === 'name' ? n.v : attrText(n) });
+        else push('name', n.k === 'name' ? n.v : attrText(n));
+        return;
+      }
+      case 'bin': { const p = PREC[n.op]; wrap(n.l, p, false); push('op', ' ' + (OPSYM[n.op] || n.op) + ' '); wrap(n.r, p, true); return; }
+      case 'cmp': { wrap(n.first, 5, false); n.ops.forEach((op, i) => { push('op', ' ' + (OPSYM[op] || op) + ' '); wrap(n.rest[i], 5, false); }); return; }
+      case 'bool': { const p = nodePrec(n); wrap(n.l, p, false); push('op', ' ' + n.op + ' '); wrap(n.r, p, true); return; }
+      case 'not': push('op', 'not '); wrap(n.e, 3, false); return;
+      case 'un': push('op', n.op === '-' ? '−' : n.op); wrap(n.e, 11, false); return;
+      case 'tern': wrap(n.a, 1); push('op', ' if '); wrap(n.cond, 1); push('op', ' else '); wrap(n.b, 1); return;
+      case 'tuple': push('p', '('); n.items.forEach((x, i) => { if (i) push('p', ', '); walk(x); }); push('p', ')'); return;
+      case 'list': push('p', '['); n.items.forEach((x, i) => { if (i) push('p', ', '); walk(x); }); push('p', ']'); return;
+      case 'sub': {
+        const base = cap && cap.get(n.base);
+        if (base && base.k === 'tensor') {
+          const idx = n.args.map(a => { const v = cap.get(a.e); return isScalar(v) ? showV(v) : '?'; });
+          const val = cap.get(n);
+          push('mem', `${base.buf.name}[${idx.join(', ')}]`, { val: asTarget || !isScalar(val) ? null : showV(val), buf: base.buf.id });
+          return;
+        }
+        push('name', calleeName(n));
+        return;
+      }
+      case 'call': {
+        const name = calleeName(n.f);
+        const root = name.split('.')[0];
+        if (IDENTITY_CALLS.has(root) && n.args.length === 1) { walk(n.args[0].e); return; }
+        const v = cap && cap.get(n);
+        if (isScalar(v) && /\.(dim|size|shape)$/.test(name)) { push('v', showV(v), { src: name + '()' }); return; }
+        push('name', name); push('p', '(');
+        n.args.forEach((a, i) => { if (i) push('p', ', '); if (a.kw) push('name', a.kw + '='); walk(a.e); });
+        push('p', ')');
+        return;
+      }
+    }
+    push('name', '…');
+  }
+  walk(e);
+  return out;
 }
 
 // ---------- Program ----------
@@ -917,7 +1006,7 @@ function simulate(prog, kernel, launchText) {
     return o;
   }
 
-  function begin(th, line) { cur = { tid: th.id, line, ev: [], log: [], note: '' }; }
+  function begin(th, line, C) { cur = { tid: th.id, line, ev: [], log: [], note: '' }; if (C) C.cap = new Map(); }
 
   function* execBlock(stmts, th, env, C) {
     for (const s of stmts) { const r = yield* execStmt(s, th, env, C); if (r) return r; }
@@ -937,34 +1026,37 @@ function simulate(prog, kernel, launchText) {
   function* execStmt(s, th, env, C) {
     switch (s.type) {
       case 'var': {
-        begin(th, s.line);
+        begin(th, s.line, C);
         env.__pendingName = s.name;
         const v = s.expr ? evalExpr(s.expr, C) : 0;
         env.__pendingName = null;
         if (v && v.k === 'tensor' && v.buf.space === 'shared' && v.buf.name === 'shared' && s.name !== 'shared') v.buf.name = s.name;
         env.set(s.name, v);
-        if (typeof v === 'number' || typeof v === 'boolean') cur.note = `${s.name} = ${showV(v)}`;
+        if (typeof v === 'number' || typeof v === 'boolean') { cur.note = `${s.name} = ${showV(v)}`; if (s.expr) cur.expl = { lhs: [{ k: 'name', s: s.name }], arrow: '=', rhs: substSegs(s.expr, C.cap), val: showV(v) }; }
         else if (v && v.k === 'tensor') cur.note = `${s.name} → ${v.buf.space} [${v.shape.join('×')}]`;
         yield cur; return null;
       }
       case 'assign': {
-        begin(th, s.line);
+        begin(th, s.line, C);
         const v = evalExpr(s.expr, C);
         cur.note = assignTarget(s.target, v, th, env, C);
+        cur.expl = { lhs: substSegs(s.target, C.cap, true), arrow: s.target.k === 'sub' ? '←' : '=', rhs: substSegs(s.expr, C.cap), val: showV(v) };
         yield cur; return null;
       }
       case 'aug': {
-        begin(th, s.line);
+        begin(th, s.line, C);
         const rhs = evalExpr(s.expr, C);
         const old = evalExpr(s.target, C);
         const v = arith(s.op, old, rhs);
         cur.note = assignTarget(s.target, v, th, env, C);
+        { const oldSegs = substSegs(s.target, C.cap); const r = substSegs(s.expr, C.cap); if (s.expr.k === 'bin' || s.expr.k === 'cmp') { r.unshift({ k: 'p', s: '(' }); r.push({ k: 'p', s: ')' }); }
+          cur.expl = { lhs: substSegs(s.target, C.cap, true), arrow: s.target.k === 'sub' ? '←' : '=', rhs: [...oldSegs, { k: 'op', s: ' ' + (OPSYM[s.op] || s.op) + ' ' }, ...r], val: showV(v) }; }
         yield cur; return null;
       }
       case 'expr': {
         const e = s.expr;
         if (e.k === 'const' && e.ellipsis) return null;
-        begin(th, s.line);
+        begin(th, s.line, C);
         if (e.k === 'call' && e.f.k === 'name' && e.f.v === 'barrier') {
           cur.barrier = true; cur.note = 'waits at barrier()';
           yield cur; return null;
@@ -973,14 +1065,15 @@ function simulate(prog, kernel, launchText) {
         yield cur; return null;
       }
       case 'pass': return null;
-      case 'break': case 'continue': begin(th, s.line); cur.note = s.type; yield cur; return { ctl: s.type };
-      case 'return': begin(th, s.line); cur.note = 'return'; if (s.expr) evalExpr(s.expr, C); yield cur; return { ctl: 'return' };
+      case 'break': case 'continue': begin(th, s.line, C); cur.note = s.type; yield cur; return { ctl: s.type };
+      case 'return': begin(th, s.line, C); cur.note = 'return'; if (s.expr) evalExpr(s.expr, C); yield cur; return { ctl: 'return' };
       case 'if': {
         for (const br of s.branches) {
-          begin(th, br.line);
+          begin(th, br.line, C);
           const c = truthy(evalExpr(br.cond, C));
           cur.note = c ? 'condition true' : 'condition false';
           cur.cond = c;
+          cur.expl = { lhs: null, arrow: '', rhs: substSegs(br.cond, C.cap), val: c ? 'True' : 'False' };
           yield cur;
           if (c) return yield* execBlock(br.body, th, env, C);
         }
@@ -989,9 +1082,10 @@ function simulate(prog, kernel, launchText) {
       }
       case 'while': {
         for (;;) {
-          begin(th, s.line);
+          begin(th, s.line, C);
           const c = truthy(evalExpr(s.cond, C));
           cur.note = c ? 'loop continues' : 'loop ends'; cur.cond = c;
+          cur.expl = { lhs: null, arrow: '', rhs: substSegs(s.cond, C.cap), val: c ? 'True' : 'False' };
           yield cur;
           if (!c) return null;
           const r = yield* execBlock(s.body, th, env, C);
@@ -1002,7 +1096,7 @@ function simulate(prog, kernel, launchText) {
       case 'for': {
         const it = s.iter;
         let seq;
-        begin(th, s.line);
+        begin(th, s.line, C);
         if (it.k === 'call' && it.f.k === 'name' && it.f.v === 'range') {
           const a = it.args.map(x => evalExpr(x.e, C));
           let [lo, hi, st] = a.length === 1 ? [0, a[0], 1] : [a[0], a[1], a[2] ?? 1];
@@ -1014,10 +1108,11 @@ function simulate(prog, kernel, launchText) {
         }
         let first = true;
         for (const x of seq) {
-          if (!first) begin(th, s.line);
+          if (!first) begin(th, s.line, C);
           first = false;
           env.set(s.names[0], x);
           cur.note = `${s.names[0]} = ${showV(x)}`;
+          cur.expl = { lhs: [{ k: 'name', s: s.names[0] }], arrow: '=', rhs: null, val: showV(x) };
           yield cur;
           const r = yield* execBlock(s.body, th, env, C);
           if (r && r.ctl === 'break') return null;
@@ -1116,4 +1211,4 @@ function flatToCoords(buf, flat) {
   return c;
 }
 
-if (typeof module !== 'undefined') module.exports = { tokenize, Parser, parseProgram, simulate, defaultLaunch, fmtNum, flatToCoordStr, MojoError };
+export { tokenize, Parser, parseProgram, simulate, defaultLaunch, fmtNum, showV, flatToCoordStr, flatToCoords, MojoError };
