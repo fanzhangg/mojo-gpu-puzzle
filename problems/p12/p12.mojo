@@ -42,8 +42,29 @@ def dot_product[
 ) where (Engine.element_size == 1):
     var size = Int(size_dev)
     # FILL ME IN (roughly 13 lines)
-    ...
+    # Allocate shared memory
+    var shared = stack_allocation[dtype=dtype, address_space=.SHARED](row_major[TPB]())
 
+    var global_i = block_dim.x * block_idx.x + thread_idx.x
+    var local_i = thread_idx.x
+
+    if global_i < size:
+        shared[local_i] = rebind[Scalar[dtype]](a[global_i] * b[global_i])
+    else:
+        shared[local_i] = 0
+
+    barrier()
+
+    var stride = TPB // 2
+
+    while stride > 0:
+        if local_i < stride:
+            shared[local_i] += shared[local_i + stride]
+        barrier()
+        stride //= 2
+
+    if local_i == 0:
+        output[0] = shared[0]
 
 # ANCHOR_END: dot_product
 
