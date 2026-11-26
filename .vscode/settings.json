@@ -1,0 +1,13 @@
+{
+  // Pixi's default env: Python 3.12 with max/torch/manim, plus the Mojo toolchain.
+  "python.defaultInterpreterPath": "${workspaceFolder}/.pixi/envs/default/bin/python",
+  "python.analysis.extraPaths": ["${workspaceFolder}"],
+
+  // Puzzles import `harness.canary`, which the tasks resolve with `mojo -I .`.
+  // The Mojo extension passes these straight to `mojo-lsp-server -I <dir>`
+  // without expanding ${workspaceFolder}, so this has to be an absolute path.
+  "mojo.lsp.includeDirs": [
+    "/home/fanzhangg/workspace/mojo-gpu-puzzles"
+  ],
+  "python-envs.defaultEnvManager": "ms-python.python:system"
+}
