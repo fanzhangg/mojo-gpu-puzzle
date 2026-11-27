@@ -26,7 +26,7 @@ for (const p of PUZZLES.filter(x => !only || only.includes(x.id))) {
     if (!k) break;
     // A page may state its exact inputs when main() fills them in a way the launch reader can't follow.
     let launch = p.oracle.launch ?? launchFromMain(src, prog, k) ?? defaultLaunch(prog, k);
-    launch = launch.split('\n').map(l => { const n = l.split('=')[0].trim(); return carried.has(n) ? `${n} = [${carried.get(n).join(', ')}]` : l; }).join('\n');
+    launch = launch.split('\n').map(l => { const n = l.split('=')[0].trim(); if (carried.has(n)) return `${n} = [${carried.get(n).join(', ')}]`; if (p.oracle.inputs && n in p.oracle.inputs) return `${n} = ${p.oracle.inputs[n]}`; return l; }).join('\n');
     const run = simulate(prog, k, launch);
     for (const b of run.buffers) if (b.isParam && b.written) carried.set(b.name, Array.from(b.data));
     real = Array.from(run.buffers.find(b => b.name === p.oracle.buffer && b.isParam).data);

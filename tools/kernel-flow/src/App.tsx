@@ -167,11 +167,10 @@ export default function App() {
           </section>
 
           {/* workspace: diagram + code */}
-          <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+          <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(340px,1fr)]">
             <Card className="flex min-w-0 flex-col overflow-hidden">
-              <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3">
-                <Button variant="ghost" size="icon-sm" onClick={() => setStage(s => Math.max(0, s - 1))} disabled={stage === 0} aria-label={t(UI.prev)}><ChevronLeft /></Button>
-                <ol className="flex flex-wrap items-center gap-1" aria-label={t(UI.steps)}>
+              <div className="flex items-start gap-3 border-b px-4 py-3">
+                <ol className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-1.5" aria-label={t(UI.steps)}>
                   {puzzle.stages.map((s, i) => (
                     <li key={i} className="flex items-center gap-1">
                       {i > 0 && <span className={cn('h-px w-3', i <= stage ? 'bg-run/60' : 'bg-border')} />}
@@ -179,14 +178,17 @@ export default function App() {
                         type="button"
                         onClick={() => setStage(i)}
                         aria-current={i === stage ? 'step' : undefined}
-                        className={cn('flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm transition-colors', i === stage ? 'border-primary bg-primary text-primary-foreground' : i < stage ? 'border-run/40 text-run hover:bg-run-soft' : 'text-muted-foreground hover:bg-accent')}
+                        className={cn('flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1 text-sm transition-colors', i === stage ? 'border-primary bg-primary text-primary-foreground' : i < stage ? 'border-run/40 text-run hover:bg-run-soft' : 'text-muted-foreground hover:bg-accent')}
                       >
                         <span className="font-mono text-xs opacity-80">{i + 1}</span>{t(s.name)}
                       </button>
                     </li>
                   ))}
                 </ol>
-                <Button variant="ghost" size="icon-sm" onClick={() => setStage(s => Math.min(last, s + 1))} disabled={stage === last} aria-label={t(UI.next)}><ChevronRight /></Button>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button variant="outline" size="icon-sm" onClick={() => setStage(s => Math.max(0, s - 1))} disabled={stage === 0} aria-label={t(UI.prev)}><ChevronLeft /></Button>
+                  <Button variant="outline" size="icon-sm" onClick={() => setStage(s => Math.min(last, s + 1))} disabled={stage === last} aria-label={t(UI.next)}><ChevronRight /></Button>
+                </div>
               </div>
 
               <div className="overflow-x-auto">

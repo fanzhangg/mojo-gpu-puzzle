@@ -14,10 +14,11 @@ with the picture than without it?*
 
 ## Puzzles
 
-Available now, in English and Chinese: 01 Map, 02 Zip, 03 Guards, 04 2D Map, 05 Broadcast, 06 Blocks,
-07 2D Blocks, 08 Shared Memory, 11 Pooling, 12 Dot Product, 13 1D Convolution (and its block-boundary
-version), 15 Axis Sum. Coming next: 14 Prefix Sum, 16 Matrix Multiplication, and the warp and block
-puzzles 24–27.
+In English and Chinese: 01 Map, 02 Zip, 03 Guards, 04 2D Map, 05 Broadcast, 06 Blocks, 07 2D Blocks,
+08 Shared Memory, 11 Pooling, 12 Dot Product, 13 1D Convolution (simple, block boundary), 14 Prefix Sum
+(one block, multiple blocks), 15 Axis Sum, 16 Matrix Multiplication (naive, shared memory, tiled), 24 Warp
+Sum, 25 Warp Communication (shuffle_down, broadcast), 26 Advanced Warp Patterns (butterfly, prefix sum),
+27 Block-Wide Patterns (block.sum, block.broadcast).
 
 Puzzles about debugging, profiling, MAX integration and hardware details (09–10, 17–23, 28–35) are left
 out: they are not about how an algorithm moves data.

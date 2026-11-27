@@ -1312,7 +1312,10 @@ function simulate(prog, kernel, launchText) {
   }
 
   // All lanes (or block threads) that reached the same collective this tick exchange values here.
-  function resolveCollectives(batch) {
+  // Resolves only the groups whose whole warp/block (all threads that have not exited) has reached
+  // the same collective call, like a barrier. Returns the threads that got their result.
+  function resolveCollectives(batch, force = false) {
+    const resolved = [];
     const groups = new Map();
     for (const th of batch) {
       const r = th.need;
@@ -1322,7 +1325,13 @@ function simulate(prog, kernel, launchText) {
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push({ th, r, lane: r.scope === 'block' ? lin : lin % WARP });
     }
-    for (const members of groups.values()) {
+    for (const [key, members] of groups) {
+      const first = members[0].th;
+      const scopeThreads = first.need.scope === 'block' ? first.block.threads : first.block.threads.filter(t => Math.floor((t.x + t.y * block.x + t.z * block.x * block.y) / WARP) === Math.floor((first.x + first.y * block.x + first.z * block.x * block.y) / WARP));
+      const here = new Set(members.map(m => m.th));
+      const ready = scopeThreads.every(t => here.has(t) || t.state === 'done' || t.state === 'err');
+      if (!ready && !force) continue;
+      resolved.push(...members.map(m => m.th));
       const byLane = new Map(members.map(m => [m.lane, m]));
       members.sort((a, b) => a.lane - b.lane);
       const all = members.map(m => m.r.val);
@@ -1350,6 +1359,7 @@ function simulate(prog, kernel, launchText) {
         m.th.need = null;
       }
     }
+    return resolved;
   }
 
   // set up generators
@@ -1365,7 +1375,7 @@ function simulate(prog, kernel, launchText) {
 
   const ticks = [{ steps: [], released: [], states: threads.map(() => 'ready') }];
   let truncated = false;
-  while (threads.some(t => t.state === 'run' || t.state === 'wait')) {
+  while (threads.some(t => t.state === 'run' || t.state === 'wait' || t.state === 'coll')) {
     tick++;
     if (tick > MAX_TICKS) { truncated = true; tick--; break; }
     const rec = { steps: [], released: [], states: null };
@@ -1390,11 +1400,15 @@ function simulate(prog, kernel, launchText) {
       if (step.barrier) th.state = 'wait';
     };
     for (const th of threads) if (th.state === 'run') advance(th);
-    for (let round = 0; pending.length && round < 20; round++) {
-      const batch = pending.splice(0);
-      resolveCollectives(batch);
-      for (const th of batch) { th.state = 'run'; advance(th); }
+    // Threads paused at a collective stay paused (across ticks) until their whole warp/block arrives.
+    for (let round = 0; round < 40; round++) {
+      const waiting = threads.filter(t => t.state === 'coll');
+      if (!waiting.length) break;
+      const done = resolveCollectives(waiting);
+      if (!done.length) break;
+      for (const th of done) { th.state = 'run'; advance(th); }
     }
+    pending.length = 0;
     for (const b of blocks) {
       const waiting = b.threads.filter(t => t.state === 'wait');
       if (!waiting.length) continue;
@@ -1406,8 +1420,12 @@ function simulate(prog, kernel, launchText) {
         rec.released.push(b.id);
       }
     }
+    if (!rec.steps.length && !rec.released.length && threads.some(t => t.state === 'coll') && !threads.some(t => t.state === 'run')) {
+      const waiting = threads.filter(t => t.state === 'coll');
+      for (const th of resolveCollectives(waiting, true)) { th.state = 'run'; advance(th); }
+    }
     rec.states = threads.map(t => t.state);
-    if (!rec.steps.length && !rec.released.length) { tick--; break; }
+    if (!rec.steps.length && !rec.released.length && !threads.some(t => t.state === 'run')) { tick--; break; }
     ticks.push(rec);
   }
   if (truncated) diag({ kind: 'limit', sev: 'warn', tick: MAX_TICKS, msg: `Stopped after ${MAX_TICKS} ticks. Check for a loop that never ends.` });

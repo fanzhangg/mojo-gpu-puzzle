@@ -14,6 +14,6 @@ export type Puzzle = {
   stages: Stage[];
   result: () => number[];
   // kernel: one kernel; kernels: run in order on the same buffers (multi-kernel pages)
-  oracle: { file: string; kernel?: string; kernels?: string[]; buffer: string; launch?: string };
+  oracle: { file: string; kernel?: string; kernels?: string[]; buffer: string; launch?: string; inputs?: Record<string, string> };
 };
 export const PUZZLES: Puzzle[];

@@ -62,7 +62,8 @@ export function Scene({ scene, pickRow, onPick, lang }: Props) {
         out.push({ d: `M${x1},${y1} C${x1},${y1 + dy} ${x2},${y2 - dy} ${x2},${y2}`, kind: a.kind, faint: a.faint });
       }
       setPaths(out);
-      setBox({ w: el.scrollWidth, h: el.scrollHeight });
+      // the layout box, not scrollWidth: scrollWidth would include this arrow layer itself, so it could never shrink
+      setBox({ w: el.offsetWidth, h: el.offsetHeight });
     };
     draw();
     const ro = new ResizeObserver(draw);
@@ -71,18 +72,20 @@ export function Scene({ scene, pickRow, onPick, lang }: Props) {
   }, [scene]);
 
   return (
-    <div ref={root} className="relative mx-auto flex w-max flex-col gap-7 px-6 py-6">
+    // w-fit + max-w-full: as wide as the content, but never wider than the card, so blocks that don't fit side
+    // by side wrap onto the next line instead of being cut off
+    <div ref={root} className="relative mx-auto flex w-fit max-w-full flex-col gap-7 px-4 py-6">
       {scene.rows.map(row => {
         const groups = row.groups ?? 1;
         const per = Math.ceil(row.cells.length / groups);
         const pickable = row.id === pickRow;
         return (
-          <div key={row.id} className="flex items-center gap-4">
-            <div className="w-24 shrink-0 text-right">
+          <div key={row.id} className="flex min-w-0 items-center gap-4">
+            <div className="w-20 shrink-0 text-right">
               <div className="font-mono text-[13px] font-semibold">{tr(row.label, lang)}</div>
               <div className={cn('text-[10px] tracking-wide', row.kind === 'shared' ? 'text-run' : 'text-muted-foreground')}>{tr(UI[row.kind], lang)}</div>
             </div>
-            <div className="flex gap-6">
+            <div className="flex min-w-0 flex-wrap gap-4">
               {Array.from({ length: groups }, (_, g) => (
                 <div key={g} className={cn('flex flex-col items-center gap-1', groups > 1 && 'rounded-lg border border-dashed px-2 pb-2 pt-1', row.kind === 'shared' && groups > 1 && 'border-run/40')}>
                   <div className={cn('grid', row.dense ? 'gap-1' : 'gap-1.5')} style={{ gridTemplateColumns: `repeat(${Math.min(per, row.cols ?? per)}, ${row.dense ? '1.85rem' : '2.75rem'})` }}>
