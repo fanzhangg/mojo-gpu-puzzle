@@ -11,7 +11,10 @@ const OPS = ['...', '**=', '//=', '->', '**', '//', '==', '!=', '<=', '>=', '+='
   '+', '-', '*', '/', '%', '<', '>', '=', '(', ')', '[', ']', '{', '}', ',', ':', '.', '@', '&', '|', '^', '~'];
 
 function tokenize(src) {
-  const lines = src.replace(/\r/g, '').replace(/\t/g, '    ').split('\n');
+  // Blank out triple-quoted strings (docstrings), keeping their newlines so line numbers stay right.
+  const clean = src.replace(/\r/g, '').replace(/\t/g, '    ')
+    .replace(/("""|''')[\s\S]*?\1/g, m => '""' + '\n'.repeat((m.match(/\n/g) || []).length));
+  const lines = clean.split('\n');
   const toks = [];
   const indents = [0];
   let depth = 0;
@@ -49,7 +52,7 @@ function tokenize(src) {
         toks.push({ t: 'str', v: line.slice(i + 1, j), line: L }); i = j + 1; continue;
       }
       const op = OPS.find(o => rest.startsWith(o));
-      if (!op) throw new MojoError(`Unexpected character "${c}"`, L);
+      if (!op) { toks.push({ t: 'op', v: c, line: L }); i++; continue; } // the parser rejects it where it matters
       if ('([{'.includes(op)) depth++;
       if (')]}'.includes(op)) depth = Math.max(0, depth - 1);
       toks.push({ t: 'op', v: op, line: L }); i += op.length;
@@ -62,6 +65,7 @@ function tokenize(src) {
 }
 
 // ---------- Parser ----------
+const KERNEL_MARKERS = ['thread_idx', 'block_idx', 'global_idx', 'barrier', 'lane_id'];
 const AUG = ['+=', '-=', '*=', '/=', '//=', '%=', '**='];
 const CMP = ['<', '>', '<=', '>=', '==', '!='];
 
@@ -118,6 +122,8 @@ class Parser {
       if (t.t === 'EOF') break;
       if (t.t === 'INDENT' || t.t === 'DEDENT') { this.next(); continue; }
       if (t.t === 'name' && (t.v === 'comptime' || t.v === 'alias')) {
+        const start = this.p;
+        try {
         this.next();
         const name = this.expectName();
         if (this.isOp(':')) { this.next(); this.collectUntil(['=']); }
@@ -125,9 +131,24 @@ class Parser {
         const expr = this.expr();
         items.push({ type: 'const', name, expr, line: t.line });
         this.endStmt();
+        } catch (err) { this.p = start; this.skipLine(); }
         continue;
       }
-      if (t.t === 'name' && (t.v === 'def' || t.v === 'fn')) { items.push(this.funcDef()); continue; }
+      if (t.t === 'name' && (t.v === 'def' || t.v === 'fn')) {
+        // A function the parser cannot handle (main(), or a kernel using unsupported features)
+        // is recorded with the reason and skipped, instead of failing the whole file.
+        const start = this.p;
+        try { items.push(this.funcDef()); }
+        catch (err) {
+          this.p = start;
+          const name = this.peek(1).t === 'name' ? this.peek(1).v : '?';
+          this.skipLine();
+          const body = this.toks.slice(start, this.p);
+          const usesThreads = body.some(x => x.t === 'name' && KERNEL_MARKERS.includes(x.v)) && !/^(test_|benchmark_|main$)/.test(name);
+          items.push({ type: 'baddef', name, line: t.line, endLine: this.toks[Math.max(0, this.p - 1)].line, message: err.message, errLine: err.line, usesThreads });
+        }
+        continue;
+      }
       this.skipLine();
     }
     return items;
@@ -141,7 +162,19 @@ class Parser {
     const kw = this.next();
     const name = this.expectName();
     const startTok = this.p;
-    if (this.isOp('[')) { this.next(); this.collectUntil([']']); this.expectOp(']'); }
+    const cparams = [];
+    if (this.isOp('[')) {
+      this.next();
+      while (!this.isOp(']')) {
+        const item = this.collectUntil([',', ']']);
+        if (item.length && item[0].t === 'name' && item[1] && item[1].t === 'op' && item[1].v === ':') {
+          const typeText = item.slice(2).map(t => t.v).join(' ');
+          cparams.push({ name: item[0].v, typeText });
+        }
+        if (this.isOp(',')) this.next(); else break;
+      }
+      this.expectOp(']');
+    }
     this.expectOp('(');
     const params = [];
     while (!this.isOp(')')) {
@@ -159,8 +192,8 @@ class Parser {
     this.expectOp(':');
     const body = this.block();
     const bodyToks = this.toks.slice(startTok, this.p);
-    const usesThreads = bodyToks.some(t => t.t === 'name' && ['thread_idx', 'block_idx', 'global_idx', 'barrier', 'block_dim'].includes(t.v));
-    return { type: 'def', name, params, body, line: kw.line, endLine: this.toks[this.p - 1].line, usesThreads };
+    const usesThreads = bodyToks.some(t => t.t === 'name' && KERNEL_MARKERS.includes(t.v)) && !/^(test_|benchmark_|main$)/.test(name);
+    return { type: 'def', name, params, cparams, body, line: kw.line, endLine: this.toks[this.p - 1].line, usesThreads };
   }
   block() {
     if (!this.isT('NL')) { const s = this.simpleStmt(); return [s]; }
@@ -179,6 +212,7 @@ class Parser {
     return stmts;
   }
   stmt() {
+    if (this.isName('comptime') && this.peek(1).t === 'name' && ['for', 'if', 'while'].includes(this.peek(1).v)) this.next();
     const t = this.peek();
     if (t.t === 'op' && t.v === '@') { this.skipLineOnly(); return null; }
     if (t.t === 'name') {
@@ -380,7 +414,11 @@ function mkLayout(shape, colMajor) {
 function mkArr(data, shape) { return { k: 'arr', data: Array.from(data), shape: shape || [data.length] }; }
 function mkDim3(v) {
   if (typeof v === 'number') return { x: v, y: 1, z: 1 };
-  if (Array.isArray(v)) return { x: v[0] ?? 1, y: v[1] ?? 1, z: v[2] ?? 1 };
+  if (Array.isArray(v)) {
+    const d = { x: v[0] ?? 1, y: v[1] ?? 1, z: v[2] ?? 1 };
+    for (const k of ['x', 'y', 'z']) if (typeof d[k] !== 'number') throw new Error(`Grid and block sizes must be numbers; ${showV(d[k])} is not known`);
+    return d;
+  }
   if (v && v.k === 'dim3') return { x: v.x, y: v.y, z: v.z };
   throw new Error('Grid and block sizes must be a number or a tuple like (4, 1)');
 }
@@ -388,7 +426,7 @@ function mkDim3(v) {
 const INT_CASTS = ['Int', 'UInt', 'Int32', 'Int64', 'UInt32', 'UInt64', 'Int16', 'Int8', 'UInt8', 'UInt16', 'Idx'];
 const FLOAT_CASTS = ['Float32', 'Float64', 'Float16', 'BFloat16'];
 const GLOBAL_BUILTINS = new Set([...INT_CASTS, ...FLOAT_CASTS, 'Scalar', 'SIMD', 'rebind', 'row_major', 'col_major', 'stack_allocation',
-  'min', 'max', 'abs', 'print', 'range', 'type_of', 'barrier', 'Layout', 'LayoutTensor', 'TileTensor', 'Bool', 'len', 'exp', 'sqrt', 'log', 'tanh', 'ceildiv', 'align_up']);
+  'min', 'max', 'abs', 'print', 'range', 'type_of', 'barrier', 'Coord', 'IndexList', 'Index', 'lane_id', 'warp_id', 'shuffle_down', 'shuffle_up', 'shuffle_xor', 'shuffle_idx', 'broadcast', 'prefix_sum', 'warp_sum', 'warp_max', 'warp_min', 'warp', 'block', 'copy_dram_to_sram_async', 'copy_dram_to_sram', 'async_copy_wait_all', 'log2', 'floor', 'ceil', 'Layout', 'LayoutTensor', 'TileTensor', 'Bool', 'len', 'exp', 'sqrt', 'log', 'tanh', 'ceildiv', 'align_up']);
 
 function truthy(v) { return typeof v === 'boolean' ? v : (typeof v === 'number' ? v !== 0 && !Number.isNaN(v) : !!v); }
 
@@ -511,11 +549,13 @@ function getAttr(v, name, C) {
   }
   if (v && v.k === 'tensor') {
     if (name === 'dim' || name === 'shape') return builtin('dim', { t: v });
+    if (name === 'tile') return builtin('tile', { t: v });
     if (name === 'size') return builtin('tsize', { t: v });
-    if (name === 'load' || name === 'store') throw new Error(`.${name}() is not supported; index the tensor directly`);
+    if (name === 'load' || name === 'store') return builtin('t' + name, { t: v });
     throw new Error(`Tensor "${v.buf.name}" has no attribute "${name}" in this visualizer`);
   }
   if (v && v.k === 'builtin' && v.name === 'Layout' && (name === 'row_major' || name === 'col_major')) return builtin(name);
+  if (v && v.k === 'builtin' && (v.name === 'warp' || v.name === 'block')) return builtin(v.name + '.' + name);
   if (v && v.k === 'ttype' && name === 'stack_allocation') return builtin('ttype_alloc', { tt: v });
   if (v && v.k === 'sym') return sym(v.name + '.' + name);
   if (v && v.k === 'layout') {
@@ -533,6 +573,9 @@ function tensorIndex(t, args, C) {
   }
   const idx = args.map(a => { if (a.kw) throw new Error(`Unexpected keyword "${a.kw}" in index`); return evalExpr(a.e, C); });
   if (idx.length === 1 && Array.isArray(idx[0])) idx.splice(0, 1, ...idx[0]);
+  return tensorIndexVals(t, idx);
+}
+function tensorIndexVals(t, idx) {
   for (const i of idx) if (typeof i !== 'number' || !Number.isInteger(i)) throw new Error(`Index into ${t.buf.name} must be an integer, got ${showV(i)}`);
   if (t.ptr) {
     if (idx.length !== 1) throw new Error(`Pointer ${t.buf.name} takes a single index`);
@@ -545,16 +588,39 @@ function tensorIndex(t, args, C) {
     if (idx[d] < 0 || idx[d] >= t.shape[d]) oob = true;
     flat += idx[d] * t.strides[d];
   }
+  if (t.view) {
+    // report coordinates in the underlying buffer, and check them against its real shape
+    const b = t.buf;
+    const coords = [];
+    let rem = flat, inside = flat >= 0 && flat < b.data.length;
+    const order = b.strides.map((st, d) => [st, d]).sort((x, y) => y[0] - x[0]);
+    const c = new Array(b.shape.length).fill(0);
+    for (const [st, d] of order) { c[d] = Math.floor(rem / st); rem -= c[d] * st; }
+    c.forEach((v, d) => { if (v < 0 || v >= b.shape[d]) inside = false; coords.push(v); });
+    // a tile that hangs over the buffer edge: map the view index back and check it there
+    const viewBase = [];
+    let r2 = t.offset;
+    const c0 = new Array(b.shape.length).fill(0);
+    for (const [st, d] of order) { c0[d] = Math.floor(r2 / st); r2 -= c0[d] * st; }
+    for (let d = 0; d < idx.length && d < c0.length; d++) { const g = c0[d] + idx[d]; viewBase.push(g); if (g >= b.shape[d]) inside = false; }
+    return { flat, coords: inside ? coords : viewBase, oob: oob || !inside };
+  }
   return { flat, coords: idx, oob };
 }
 
 function subscriptNonTensor(base, params, C) {
   if (base && base.k === 'builtin') {
     if (base.name === 'dim' && params.length === 1) return builtin('dimk', { t: base.params.t, d: params[0].v });
+    if (base.name === 'tload' || base.name === 'tstore') return base;
+    if (base.name === 'tile') return builtin('tilek', { t: base.params.t, sizes: params.filter(p => !p.kw).map(p => p.v) });
     if (base.name === 'LayoutTensor' || base.name === 'TileTensor') return { k: 'ttype', params };
     return builtin(base.name, params);
   }
   if (base && base.k === 'sym') return base;
+  if (typeof base === 'number' || typeof base === 'boolean') {
+    if (params.length === 1 && params[0].v === 0) return base; // a scalar is a SIMD vector of width 1
+    throw new Error(`Cannot index the scalar ${showV(base)} at ${showV(params[0].v)}`);
+  }
   if (base && base.k === 'arr') {
     const i = params[0].v; return base.data[i];
   }
@@ -578,6 +644,15 @@ function callValue(f, args, C, node) {
     throw new Error(`${showV(f)} is not callable here`);
   }
   const n = f.name;
+  if (n === 'lane_id' || n === 'warp_id') { if (!C.laneInfo) throw new Error(`${n}() can only run inside a kernel`); return C.laneInfo()[n === 'lane_id' ? 'lane' : 'warp']; }
+  if (COLLECTIVES[n]) {
+    if (!C.collective) throw new Error(`${n}() can only run inside a kernel`);
+    const [scope, kind] = COLLECTIVES[n];
+    const kw = name => { const a = args.find(x => x.kw === name) || (f.params || []).find(x => x.kw === name); return a ? a.v : undefined; };
+    const val = pos[0] ?? kw('val') ?? kw('value');
+    const arg = pos[1] ?? kw('offset') ?? kw('lane_mask') ?? kw('src_lane') ?? kw('src_thread');
+    return C.collective(node, scope, kind, val, arg, { exclusive: !!kw('exclusive') });
+  }
   if (INT_CASTS.includes(n)) { const v = pos[0]; return typeof v === 'boolean' ? +v : Math.trunc(v); }
   if (FLOAT_CASTS.includes(n) || n === 'Scalar' || n === 'SIMD') { const v = pos[0]; return typeof v === 'boolean' ? +v : Math.fround(v); }
   if (n === 'Bool') return truthy(pos[0]);
@@ -589,6 +664,9 @@ function callValue(f, args, C, node) {
     case 'abs': return Math.abs(pos[0]);
     case 'exp': return Math.exp(pos[0]);
     case 'sqrt': return Math.sqrt(pos[0]);
+    case 'log2': return Math.log2(pos[0]);
+    case 'floor': return Math.floor(pos[0]);
+    case 'ceil': return Math.ceil(pos[0]);
     case 'log': return Math.log(pos[0]);
     case 'tanh': return Math.tanh(pos[0]);
     case 'ceildiv': return Math.ceil(pos[0] / pos[1]);
@@ -600,11 +678,34 @@ function callValue(f, args, C, node) {
       return mkLayout(dims, n === 'col_major');
     }
     case 'dim': return f.params.t.shape[pos[0]];
+    case 'Coord': case 'IndexList': case 'Index': return pos.length === 1 ? pos[0] : pos;
+    case 'tload': case 'tstore': {
+      const t = f.params.t;
+      const idx = [pos[0]].flat();
+      const r = tensorIndexVals(t, idx);
+      if (n === 'tload') return C.onRead(t, r.flat, r.coords, r.oob);
+      if (!C.writeTensor) throw new Error('store can only run inside a kernel');
+      C.writeTensor(t, r, pos[1]);
+      return null;
+    }
+    case 'tilek': {
+      // t.tile[s0, s1](c0, c1): a view of shape [s0, s1] starting at (c0*s0, c1*s1)
+      const t = f.params.t, sizes = f.params.sizes;
+      if (sizes.length !== pos.length || sizes.length !== t.shape.length) throw new Error(`tile needs ${t.shape.length} sizes and ${t.shape.length} tile coordinates`);
+      let offset = t.offset;
+      for (let d = 0; d < sizes.length; d++) offset += pos[d] * sizes[d] * t.strides[d];
+      return { k: 'tensor', buf: t.buf, shape: sizes, strides: t.strides, offset, ptr: false, view: true };
+    }
     case 'dimk': return f.params.t.shape[f.params.d];
     case 'tsize': return f.params.t.shape.reduce((a, b) => a * b, 1);
     case 'lsize': return f.params.l.size;
     case 'print': if (C.onPrint) C.onPrint(pos.map(showV).join(' ')); return null;
     case 'barrier': throw new Error('barrier() must be its own statement');
+    case 'copy_dram_to_sram_async': case 'copy_dram_to_sram': case 'copy':
+      if (!C.copyTile) throw new Error(`${n} can only run inside a kernel`);
+      C.copyTile(pos[0], pos[1]);
+      return null;
+    case 'async_copy_wait_all': return null;
     case 'range': throw new Error('range() can only be used in a for loop');
     case 'stack_allocation': {
       if (!C.allocShared) throw new Error('stack_allocation can only run inside a kernel');
@@ -711,12 +812,25 @@ function substSegs(e, cap, asTarget) {
   return out;
 }
 
+// Warp and block collectives: name -> [scope, operation]
+const COLLECTIVES = {
+  shuffle_down: ['warp', 'down'], shuffle_up: ['warp', 'up'], shuffle_xor: ['warp', 'xor'], shuffle_idx: ['warp', 'idx'],
+  broadcast: ['warp', 'broadcast'], prefix_sum: ['warp', 'prefix_sum'],
+  warp_sum: ['warp', 'sum'], warp_max: ['warp', 'max'], warp_min: ['warp', 'min'],
+  'warp.sum': ['warp', 'sum'], 'warp.max': ['warp', 'max'], 'warp.min': ['warp', 'min'], 'warp.broadcast': ['warp', 'broadcast'],
+  'warp.prefix_sum': ['warp', 'prefix_sum'], 'warp.shuffle_down': ['warp', 'down'], 'warp.shuffle_up': ['warp', 'up'], 'warp.shuffle_xor': ['warp', 'xor'], 'warp.shuffle_idx': ['warp', 'idx'],
+  'block.sum': ['block', 'sum'], 'block.max': ['block', 'max'], 'block.min': ['block', 'min'], 'block.broadcast': ['block', 'broadcast'], 'block.prefix_sum': ['block', 'prefix_sum'],
+};
+class NeedCollective { constructor(req) { this.req = req; } }
+const COLL_WAIT = { collWait: true };
+let NODE_UID = 0;
+
 // ---------- Program ----------
 function parseProgram(src) {
   const items = new Parser(tokenize(src)).module();
   const consts = items.filter(i => i.type === 'const');
   const defs = items.filter(i => i.type === 'def');
-  const env = new Map();
+  const env = new Map([['WARP_SIZE', 32]]);
   const C = {
     lookup(name, line) {
       if (env.has(name)) return env.get(name);
@@ -731,7 +845,8 @@ function parseProgram(src) {
     catch (err) { constErrors.push(new MojoError(`comptime ${c.name}: ${err.message}`, c.line)); env.set(c.name, sym(c.name)); }
   }
   const kernels = defs.filter(d => d.name !== 'main' && d.usesThreads);
-  return { items, consts: env, defs, kernels, constErrors };
+  const unsupported = items.filter(i => i.type === 'baddef' && i.usesThreads && i.name !== 'main');
+  return { items, consts: env, defs, kernels, unsupported, constErrors };
 }
 
 function paramKind(p, consts) {
@@ -814,16 +929,29 @@ function evalSpec(e, C) {
 
 function defaultLaunch(prog, kernel) {
   const c = prog.consts;
-  const has = n => c.has(n) && c.get(n) && c.get(n).k !== 'sym';
+  const has0 = n => c.has(n) && c.get(n) && c.get(n).k !== 'sym';
+  // If the kernel's tensors use e.g. `LayoutTiledType`, prefer SIZE_TILED, BLOCKS_PER_GRID_TILED, ...
+  const suffixes = [];
+  for (const p of kernel.params) for (const t of p.typeToks || []) {
+    const m = t.t === 'name' && t.v.match(/^Layout([A-Z][a-z]+)\w*Type$/);
+    if (m) suffixes.push('_' + m[1].toUpperCase());
+  }
+  const pick = n => { for (const sfx of suffixes) if (has0(n + sfx)) return n + sfx; return n; };
+  const has = n => has0(pick(n));
   const out = [];
-  out.push(`grid  = ${has('BLOCKS_PER_GRID') ? 'BLOCKS_PER_GRID' : '1'}`);
-  out.push(`block = ${has('THREADS_PER_BLOCK') ? 'THREADS_PER_BLOCK' : has('TPB') ? 'TPB' : has('SIZE') ? 'SIZE' : '4'}`);
+  for (const cp of kernel.cparams || []) {
+    if (!/^(Int|UInt|Int32|Int64)$/.test(cp.typeText.trim())) continue;
+    const up = cp.name.toUpperCase();
+    out.push(`${cp.name} = ${has(up) ? pick(up) : has('SIZE') ? pick('SIZE') : '4'}   # compile-time parameter`);
+  }
+  out.push(`grid  = ${has('BLOCKS_PER_GRID') ? pick('BLOCKS_PER_GRID') : '1'}`);
+  out.push(`block = ${has('THREADS_PER_BLOCK') ? pick('THREADS_PER_BLOCK') : has('TPB') ? 'TPB' : has('SIZE') ? pick('SIZE') : '4'}`);
   for (const p of kernel.params) {
     const k = paramKind(p, c);
     if (k.kind === 'scalar') {
-      out.push(`${p.name} = ${has('SIZE') ? 'SIZE' : '4'}`);
+      out.push(`${p.name} = ${has('SIZE') ? pick('SIZE') : '4'}`);
     } else {
-      const n = k.layout ? k.layout.size : (has('SIZE') ? 'SIZE' : 8);
+      const n = k.layout ? k.layout.size : (has('SIZE') ? pick('SIZE') : 8);
       const outish = /^(out|output|result|res|c)$/i.test(p.name) || p.name.startsWith('out');
       out.push(`${p.name} = ${outish ? 'zeros' : 'arange'}(${n})`);
     }
@@ -847,6 +975,12 @@ function simulate(prog, kernel, launchText) {
 
   const buffers = [];
   const args = new Map();
+  for (const cp of kernel.cparams || []) {
+    if (!/^(Int|UInt|Int32|Int64)$/.test(cp.typeText.trim())) continue;
+    const v = vals.has(cp.name) ? vals.get(cp.name) : undefined;
+    if (typeof v !== 'number') throw new MojoError(`Set the compile-time parameter "${cp.name} = ..." in the launch settings`, 1);
+    args.set(cp.name, v);
+  }
   for (const p of kernel.params) {
     const k = paramKind(p, consts);
     let v = vals.get(p.name);
@@ -947,6 +1081,41 @@ function simulate(prog, kernel, launchText) {
         return val;
       },
       onPrint(s) { cur.log.push(s); },
+      writeTensor(t, r, val) { writeMem(t, r.flat, r.coords, r.oob, val, th); },
+      laneInfo() {
+        const lin = th.x + th.y * block.x + th.z * block.x * block.y;
+        return { lane: lin % WARP, warp: Math.floor(lin / WARP), linear: lin };
+      },
+      collective(node, scope, kind, val, arg, opts) {
+        if (node.__uid === undefined) node.__uid = ++NODE_UID;
+        const seq = th.collSeq.get(node.__uid) || 0;
+        const key = node.__uid + ':' + seq;
+        const res = th.collResults.get(key);
+        if (res) {
+          th.collResults.delete(key);
+          th.collSeq.set(node.__uid, seq + 1);
+          if (res.sources.length) cur.xfer = (cur.xfer || []).concat(res.sources.map(from => ({ from, to: th.id })));
+          return res.value;
+        }
+        if (typeof val === 'boolean') val = +val;
+        if (typeof val !== 'number') throw new Error(`${kind} needs a number, got ${showV(val)}`);
+        throw new NeedCollective({ uid: node.__uid, seq, scope, kind, val, arg, opts });
+      },
+      // Block-wide tile copy (copy_dram_to_sram_async): element e is copied by thread e % threads_in_block.
+      copyTile(dst, src) {
+        if (!dst || dst.k !== 'tensor' || !src || src.k !== 'tensor') throw new Error('copy needs a destination and a source tensor');
+        const nT = block.x * block.y * block.z;
+        const me = th.x + th.y * block.x + th.z * block.x * block.y;
+        const total = dst.shape.reduce((a, b) => a * b, 1);
+        for (let e = me; e < total; e += nT) {
+          const c = []; let r = e;
+          for (let d = dst.shape.length - 1; d >= 0; d--) { c[d] = r % dst.shape[d]; r = Math.floor(r / dst.shape[d]); }
+          const sIdx = tensorIndexVals(src, src.shape.length === c.length ? c : [e]);
+          const v = this.onRead(src, sIdx.flat, sIdx.coords, sIdx.oob);
+          const dIdx = tensorIndexVals(dst, c);
+          writeMem(dst, dIdx.flat, dIdx.coords, dIdx.oob, v, th);
+        }
+      },
       allocShared(node, layout, shared, isPtr) {
         const key = node.line + ':' + (node.col || 0) + ':' + env.__allocCount;
         let buf;
@@ -1006,6 +1175,21 @@ function simulate(prog, kernel, launchText) {
     return o;
   }
 
+  const WARP = 32;
+  // Runs fn; if it hits a warp/block collective, pause until the other lanes arrive, then run it again.
+  function* withCollectives(th, C, line, fn) {
+    for (let round = 0; ; round++) {
+      const snap = new Map(th.collSeq);
+      begin(th, line, C);
+      try { return fn(); }
+      catch (e) {
+        if (!(e instanceof NeedCollective) || round > 16) throw e;
+        th.collSeq = snap;
+        th.need = e.req;
+        yield COLL_WAIT;
+      }
+    }
+  }
   function begin(th, line, C) { cur = { tid: th.id, line, ev: [], log: [], note: '' }; if (C) C.cap = new Map(); }
 
   function* execBlock(stmts, th, env, C) {
@@ -1026,10 +1210,10 @@ function simulate(prog, kernel, launchText) {
   function* execStmt(s, th, env, C) {
     switch (s.type) {
       case 'var': {
-        begin(th, s.line, C);
-        env.__pendingName = s.name;
-        const v = s.expr ? evalExpr(s.expr, C) : 0;
-        env.__pendingName = null;
+        const v = yield* withCollectives(th, C, s.line, () => {
+          env.__pendingName = s.name;
+          try { return s.expr ? evalExpr(s.expr, C) : 0; } finally { env.__pendingName = null; }
+        });
         if (v && v.k === 'tensor' && v.buf.space === 'shared' && v.buf.name === 'shared' && s.name !== 'shared') v.buf.name = s.name;
         env.set(s.name, v);
         if (typeof v === 'number' || typeof v === 'boolean') { cur.note = `${s.name} = ${showV(v)}`; if (s.expr) cur.expl = { lhs: [{ k: 'name', s: s.name }], arrow: '=', rhs: substSegs(s.expr, C.cap), val: showV(v) }; }
@@ -1037,31 +1221,34 @@ function simulate(prog, kernel, launchText) {
         yield cur; return null;
       }
       case 'assign': {
-        begin(th, s.line, C);
-        const v = evalExpr(s.expr, C);
-        cur.note = assignTarget(s.target, v, th, env, C);
-        cur.expl = { lhs: substSegs(s.target, C.cap, true), arrow: s.target.k === 'sub' ? '←' : '=', rhs: substSegs(s.expr, C.cap), val: showV(v) };
+        yield* withCollectives(th, C, s.line, () => {
+          const v = evalExpr(s.expr, C);
+          cur.note = assignTarget(s.target, v, th, env, C);
+          cur.expl = { lhs: substSegs(s.target, C.cap, true), arrow: s.target.k === 'sub' ? '←' : '=', rhs: substSegs(s.expr, C.cap), val: showV(v) };
+        });
         yield cur; return null;
       }
       case 'aug': {
-        begin(th, s.line, C);
-        const rhs = evalExpr(s.expr, C);
-        const old = evalExpr(s.target, C);
-        const v = arith(s.op, old, rhs);
-        cur.note = assignTarget(s.target, v, th, env, C);
+        const v = yield* withCollectives(th, C, s.line, () => {
+          const rhs = evalExpr(s.expr, C);
+          const old = evalExpr(s.target, C);
+          const v = arith(s.op, old, rhs);
+          cur.note = assignTarget(s.target, v, th, env, C);
+          return v;
+        });
         { const oldSegs = substSegs(s.target, C.cap); const r = substSegs(s.expr, C.cap); if (s.expr.k === 'bin' || s.expr.k === 'cmp') { r.unshift({ k: 'p', s: '(' }); r.push({ k: 'p', s: ')' }); }
           cur.expl = { lhs: substSegs(s.target, C.cap, true), arrow: s.target.k === 'sub' ? '←' : '=', rhs: [...oldSegs, { k: 'op', s: ' ' + (OPSYM[s.op] || s.op) + ' ' }, ...r], val: showV(v) }; }
         yield cur; return null;
       }
       case 'expr': {
         const e = s.expr;
-        if (e.k === 'const' && e.ellipsis) return null;
-        begin(th, s.line, C);
+        if ((e.k === 'const' && e.ellipsis) || e.k === 'str') return null;
         if (e.k === 'call' && e.f.k === 'name' && e.f.v === 'barrier') {
+          begin(th, s.line, C);
           cur.barrier = true; cur.note = 'waits at barrier()';
           yield cur; return null;
         }
-        evalExpr(e, C);
+        yield* withCollectives(th, C, s.line, () => evalExpr(e, C));
         yield cur; return null;
       }
       case 'pass': return null;
@@ -1069,8 +1256,7 @@ function simulate(prog, kernel, launchText) {
       case 'return': begin(th, s.line, C); cur.note = 'return'; if (s.expr) evalExpr(s.expr, C); yield cur; return { ctl: 'return' };
       case 'if': {
         for (const br of s.branches) {
-          begin(th, br.line, C);
-          const c = truthy(evalExpr(br.cond, C));
+          const c = yield* withCollectives(th, C, br.line, () => truthy(evalExpr(br.cond, C)));
           cur.note = c ? 'condition true' : 'condition false';
           cur.cond = c;
           cur.expl = { lhs: null, arrow: '', rhs: substSegs(br.cond, C.cap), val: c ? 'True' : 'False' };
@@ -1125,12 +1311,55 @@ function simulate(prog, kernel, launchText) {
     throw new Error('Unsupported statement');
   }
 
+  // All lanes (or block threads) that reached the same collective this tick exchange values here.
+  function resolveCollectives(batch) {
+    const groups = new Map();
+    for (const th of batch) {
+      const r = th.need;
+      const lin = th.x + th.y * block.x + th.z * block.x * block.y;
+      const scopeKey = r.scope === 'block' ? 'b' + th.block.id : 'w' + th.block.id + ':' + Math.floor(lin / WARP);
+      const key = scopeKey + '|' + r.uid + '|' + r.seq;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push({ th, r, lane: r.scope === 'block' ? lin : lin % WARP });
+    }
+    for (const members of groups.values()) {
+      const byLane = new Map(members.map(m => [m.lane, m]));
+      members.sort((a, b) => a.lane - b.lane);
+      const all = members.map(m => m.r.val);
+      for (const m of members) {
+        const { kind, val, arg, opts } = m.r;
+        let value = val, sources = [];
+        const from = src => { const o = byLane.get(src); if (o && o !== m) { value = o.r.val; sources = [o.th.id]; } };
+        switch (kind) {
+          case 'down': from(m.lane + (arg ?? 1)); break;
+          case 'up': from(m.lane - (arg ?? 1)); break;
+          case 'xor': from(m.lane ^ (arg ?? 1)); break;
+          case 'idx': from(arg ?? 0); break;
+          case 'broadcast': from(arg ?? 0); break;
+          case 'sum': value = all.reduce((a, b) => a + b, 0); sources = members.filter(o => o !== m).map(o => o.th.id); break;
+          case 'max': value = Math.max(...all); sources = members.filter(o => o !== m).map(o => o.th.id); break;
+          case 'min': value = Math.min(...all); sources = members.filter(o => o !== m).map(o => o.th.id); break;
+          case 'prefix_sum': {
+            const upto = members.filter(o => (opts.exclusive ? o.lane < m.lane : o.lane <= m.lane));
+            value = upto.reduce((a, o) => a + o.r.val, 0);
+            sources = upto.filter(o => o !== m).map(o => o.th.id);
+            break;
+          }
+        }
+        m.th.collResults.set(m.r.uid + ':' + m.r.seq, { value: Math.fround(value), sources });
+        m.th.need = null;
+      }
+    }
+  }
+
   // set up generators
   for (const th of threads) {
     const env = new Map(args);
     env.__allocCount = 0;
     const C = makeCtx(th, env);
     th.env = env;
+    th.collSeq = new Map();
+    th.collResults = new Map();
     th.gen = (function* () { yield* execBlock(kernel.body, th, env, C); })();
   }
 
@@ -1140,8 +1369,8 @@ function simulate(prog, kernel, launchText) {
     tick++;
     if (tick > MAX_TICKS) { truncated = true; tick--; break; }
     const rec = { steps: [], released: [], states: null };
-    for (const th of threads) {
-      if (th.state !== 'run') continue;
+    const pending = [];
+    const advance = th => {
       curThread = th;
       let r;
       try { r = th.gen.next(); }
@@ -1151,13 +1380,20 @@ function simulate(prog, kernel, launchText) {
         rec.steps.push(step); th.steps.push(tick);
         th.state = 'err';
         diag({ kind: 'runtime', sev: 'error', tick, tid: th.id, line, key: 'rt:' + line + err.message, msg: `${threadLabel(th)} stopped on line ${line}: ${err.message}` });
-        continue;
+        return;
       }
-      if (r.done) { th.state = 'done'; th.doneTick = tick; continue; }
+      if (r.done) { th.state = 'done'; th.doneTick = tick; return; }
+      if (r.value === COLL_WAIT) { th.state = 'coll'; pending.push(th); return; }
       const step = r.value;
       step.vars = snapVars(th.env);
       rec.steps.push(step); th.steps.push(tick);
       if (step.barrier) th.state = 'wait';
+    };
+    for (const th of threads) if (th.state === 'run') advance(th);
+    for (let round = 0; pending.length && round < 20; round++) {
+      const batch = pending.splice(0);
+      resolveCollectives(batch);
+      for (const th of batch) { th.state = 'run'; advance(th); }
     }
     for (const b of blocks) {
       const waiting = b.threads.filter(t => t.state === 'wait');
@@ -1211,4 +1447,121 @@ function flatToCoords(buf, flat) {
   return c;
 }
 
-export { tokenize, Parser, parseProgram, simulate, defaultLaunch, fmtNum, showV, flatToCoordStr, flatToCoords, MojoError };
+// ---------- Launch settings read from main() ----------
+// Finds `ctx.enqueue_function[kernel](args..., grid_dim=..., block_dim=...)` in the host code and
+// works out each buffer's size and how it was filled. Returns null when the pattern is not found.
+function launchFromMain(src, prog, kernel) {
+  const text = src.replace(/\r/g, '').replace(/#[^\n]*/g, '');
+  const balanced = (str, open) => {
+    // returns [inner, endIndex] for the bracket starting at `open`
+    const pairs = { '(': ')', '[': ']' };
+    const close = pairs[str[open]];
+    let d = 0;
+    for (let i = open; i < str.length; i++) {
+      if (str[i] === '(' || str[i] === '[') d++;
+      else if (str[i] === ')' || str[i] === ']') { d--; if (d === 0) return [str.slice(open + 1, i), i]; }
+    }
+    return [str.slice(open + 1), str.length];
+  };
+  const splitTop = str => {
+    const out = []; let d = 0, cur = '';
+    for (const ch of str) {
+      if ('([{'.includes(ch)) d++;
+      if (')]}'.includes(ch)) d--;
+      if (ch === ',' && d === 0) { out.push(cur.trim()); cur = ''; } else cur += ch;
+    }
+    if (cur.trim()) out.push(cur.trim());
+    return out;
+  };
+  // collect every launch
+  const launches = [];
+  let at = 0;
+  for (;;) {
+    const i = text.indexOf('enqueue_function', at);
+    if (i < 0) break;
+    let j = text.indexOf('[', i);
+    const [callee, endCallee] = balanced(text, j);
+    j = text.indexOf('(', endCallee);
+    const [argText, end] = balanced(text, j);
+    at = end;
+    const m = callee.match(/^\s*([A-Za-z_]\w*)\s*(?:\[([\s\S]*)\])?\s*$/);
+    if (!m) continue;
+    const args = splitTop(argText);
+    // a launch through an alias: `comptime kernel = matmul_tiled[...]` shortly before the call
+    let alias = null;
+    const before = text.slice(Math.max(0, i - 800), i);
+    const am = [...before.matchAll(new RegExp('(?:comptime|alias|var)\\s+' + m[1] + '\\s*=\\s*([A-Za-z_]\\w*)', 'g'))].pop();
+    if (am) alias = am[1];
+    launches.push({ alias, name: m[1], cargs: m[2] ? splitTop(m[2]) : [], pos: args.filter(a => !/^\w+\s*=[^=]/.test(a)), kw: Object.fromEntries(args.filter(a => /^\w+\s*=[^=]/.test(a)).map(a => [a.split('=')[0].trim(), a.slice(a.indexOf('=') + 1).trim()])) });
+  }
+  const launch = launches.find(l => l.name === kernel.name) || launches.find(l => l.alias === kernel.name) || launches.find(l => l.pos.length === kernel.params.length && !prog.kernels.some(k => k.name === l.name));
+  if (!launch) return null;
+
+  // names defined in host code: `var x = expr`, `comptime x = expr`
+  const defs = new Map();
+  for (const m of text.matchAll(/^\s*(?:var|comptime|alias|let)\s+(\w+)\s*(?::[^=\n]+)?=\s*([^\n]+)$/gm)) if (!defs.has(m[1])) defs.set(m[1], m[2].trim());
+  const consts = prog.consts;
+  const resolve = (expr, depth = 0) => expr.replace(/\b[A-Za-z_]\w*\b/g, n => {
+    if (consts.has(n) && consts.get(n) && consts.get(n).k !== 'sym') return n;
+    if (depth < 4 && defs.has(n) && !/enqueue|TileTensor|mem\.|ctx\./.test(defs.get(n))) return '(' + resolve(defs.get(n), depth + 1) + ')';
+    return n;
+  });
+  const unwrapCast = a => { const m = a.match(/^(?:Int32|Int|UInt|Int64|UInt32|Float32|Scalar\[\w+\])\(([\s\S]*)\)$/); return m ? m[1].trim() : a; };
+
+  const lines = [];
+  // compile-time Int parameters passed as kernel[...] arguments
+  const intCparams = (kernel.cparams || []).map((cp, i) => ({ ...cp, i })).filter(cp => /^(Int|UInt|Int32|Int64)$/.test(cp.typeText.trim()));
+  for (const cp of intCparams) {
+    const a = launch.cargs[cp.i];
+    if (a && !/\.Engine$|^\w+\.\w+$/.test(a)) lines.push(`${cp.name} = ${resolve(a)}`);
+  }
+  if (launch.kw.grid_dim) lines.push(`grid  = ${resolve(launch.kw.grid_dim)}`);
+  if (launch.kw.block_dim) lines.push(`block = ${resolve(launch.kw.block_dim)}`);
+  kernel.params.forEach((p, i) => {
+    let a = launch.pos[i];
+    if (!a) return;
+    const kind = paramKind(p, consts).kind;
+    if (kind === 'scalar') { lines.push(`${p.name} = ${resolve(unwrapCast(a))}`); return; }
+    // tensor: follow `x = TileTensor(buf, layout)` back to the buffer
+    let bufName = a.match(/^\w+$/) ? a : null;
+    for (let k = 0; k < 3 && bufName && defs.has(bufName); k++) {
+      const d = defs.get(bufName);
+      const m = d.match(/^(?:TileTensor|LayoutTensor)(?:\[[^\]]*\])?\(\s*(\w+)/);
+      if (m) { bufName = m[1]; continue; }
+      break;
+    }
+    const d = bufName && defs.get(bufName);
+    const sizeM = d && (d.match(/enqueue_create_buffer\[[^\]]*\]\(([\s\S]+)\)\s*$/) || d.match(/\.output\(([\s\S]+)\)\s*$/));
+    if (!sizeM) return; // let defaults handle it
+    const size = resolve(sizeM[1].trim());
+    const isOut = /\.output\(/.test(d);
+    const hostNames = [bufName + '_host', ...[...text.matchAll(new RegExp('\\b' + bufName + '\\.map_to_host\\(\\)\\s+as\\s+(\\w+)', 'g'))].map(m => m[1])];
+    const hostWrite = hostNames.some(h => new RegExp('\\b' + h + '\\[[^\\]]+\\]\\s*=').test(text));
+    const fill = text.match(new RegExp('\\b' + bufName + '\\.enqueue_fill\\(([^)]+)\\)'));
+    let init;
+    if (isOut) init = `zeros(${size})`;
+    else if (hostWrite) init = `arange(${size})`;
+    else if (fill) init = `fill(${size}, ${fill[1].trim()})`;
+    else init = `zeros(${size})`;
+    lines.push(`${p.name} = ${init}`);
+  });
+  if (!lines.length) return null;
+  // Keep each line from main() only if it evaluates on its own; otherwise use the guessed default.
+  const fromMain = new Map();
+  for (const l of lines) {
+    const name = l.split('=')[0].trim();
+    try {
+      const { vals } = parseLaunch(l, consts);
+      const v = vals.get(name);
+      if (name === 'grid' || name === 'block') mkDim3(v);
+      const kp = kernel.params.find(p => p.name === name);
+      const lay = kp && paramKind(kp, consts).layout;
+      if (lay && v && v.k === 'arr' && v.data.length !== lay.size) continue;
+      fromMain.set(name, l);
+    } catch { /* fall back */ }
+  }
+  const merged = defaultLaunch(prog, kernel).split('\n').map(l => fromMain.get(l.split('=')[0].trim()) || l);
+  return merged.join('\n');
+}
+
+export { launchFromMain, tokenize, Parser, parseProgram, simulate, defaultLaunch, fmtNum, showV, flatToCoordStr, flatToCoords, MojoError };

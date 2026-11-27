@@ -137,6 +137,7 @@
   .wire { fill: none; stroke-width: 1.6; }
   .wire-r { stroke: hsl(var(--read)); }
   .wire-w { stroke: hsl(var(--write)); stroke-width: 2.1; }
+  .wire-x { stroke: hsl(var(--run)); stroke-width: 1.8; }
   .wire-dim { opacity: 0.1; }
   .hatch { background-image: repeating-linear-gradient(135deg, hsl(var(--wait) / 0.28) 0 4px, transparent 4px 8px); }
 }

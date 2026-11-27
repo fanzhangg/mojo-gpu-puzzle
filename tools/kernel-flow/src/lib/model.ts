@@ -185,3 +185,24 @@ export function traffic(run: Run) {
   );
   return per;
 }
+
+// ---------- Frames: the moments when data moves ----------
+// A frame is a tick where some thread read or wrote memory, or where a barrier released.
+// Control-flow-only ticks (index math, if checks) are folded away.
+export type Frame = { tick: number; kind: 'start' | 'data' | 'barrier'; line?: number; threads: number; exchange?: boolean };
+
+export function frames(run: Run): Frame[] {
+  const out: Frame[] = [{ tick: 0, kind: 'start', threads: 0 }];
+  for (let k = 1; k < run.ticks.length; k++) {
+    const tk = run.ticks[k];
+    const moving = tk.steps.filter(s => s.ev.length || s.xfer?.length);
+    if (moving.length) {
+      const counts = new Map<number, number>();
+      for (const s of moving) counts.set(s.line, (counts.get(s.line) || 0) + 1);
+      const line = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+      out.push({ tick: k, kind: 'data', line, threads: moving.length, exchange: moving.some(s => s.xfer?.length) });
+    }
+    if (tk.released.length) out.push({ tick: k, kind: 'barrier', threads: 0 });
+  }
+  return out;
+}

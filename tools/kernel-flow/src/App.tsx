@@ -1,303 +1,359 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Play, RotateCcw, Cpu } from 'lucide-react';
-import { parseProgram, simulate, defaultLaunch, type Run, type Program, type Diag } from '@/engine/engine.js';
-import PRESETS from '@/presets.json';
-import { derive, tShort, type Derived } from '@/lib/model';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Pause, Play, Pencil, Check, X, Cpu, Loader2 } from 'lucide-react';
+import { parseProgram, simulate, defaultLaunch, launchFromMain, type Run, type Program, type Unsupported } from '@/engine/engine.js';
+import LIBRARY from '@/library.json';
+import { derive, frames, tShort, type Derived } from '@/lib/model';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectSeparator, SelectGroup, SelectLabel } from '@/components/ui/select';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Card } from '@/components/ui/card';
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Slider } from '@/components/ui/slider';
 import { Textarea } from '@/components/ui/textarea';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { TooltipProvider } from '@/components/ui/tooltip';
-import { CodePanel } from '@/components/CodePanel';
-import { Stage, type Hover } from '@/components/Stage';
-import { Transport } from '@/components/Transport';
-import { StoryPanel, TickPanel, InspectorPanel, ChecksPanel, TrafficPanel } from '@/components/Panels';
+import { Breakdown } from '@/components/Breakdown';
+import { CodeView } from '@/components/CodeView';
+import { Flow } from '@/components/Flow';
+import { cn } from '@/lib/utils';
 
-type Preset = { id: string; title: string; code: string; launch: string };
-const presets = PRESETS as Preset[];
-const STORE = 'kernel-flow:v2';
+type Entry = { path: string; group: string; puzzle: string; title?: string; code?: string; launch?: string };
+const BUNDLED = LIBRARY as Entry[];
+const PASTED = '__pasted__';
+const STORE = 'kernel-flow:v4';
+const GROUP_LABEL: Record<string, string> = { solutions: 'Solutions' };
 
-type Saved = { code: string; launch: string; preset: string; kernelIdx: number };
-function loadSaved(): Saved | null {
-  try { const raw = localStorage.getItem(STORE); return raw ? (JSON.parse(raw) as Saved) : null; } catch { return null; }
-}
-function save(s: Saved) {
-  try { localStorage.setItem(STORE, JSON.stringify(s)); } catch { /* storage unavailable */ }
-}
+type Saved = { path: string; kernel: string | null; pasted?: string };
+const loadSaved = (): Saved | null => { try { const r = localStorage.getItem(STORE); return r ? JSON.parse(r) : null; } catch { return null; } };
+const save = (s: Saved) => { try { localStorage.setItem(STORE, JSON.stringify(s)); } catch { /* unavailable */ } };
 
-type Exec = { prog: Program | null; run: Run | null; d: Derived | null; codeErr: string | null; errLine: number | null; launchErr: string | null; warn: string | null };
+type ServerInfo = { gpu: string | null; tools: string[] };
+type GpuResult = { ok: boolean; exitCode?: number; stdout?: string; stderr?: string; seconds?: number; command?: string; error?: string };
 
-function execute(code: string, launch: string, kernelIdx: number): Exec & { launch: string } {
+type Sim = { prog: Program | null; run: Run | null; d: Derived | null; unsupported: Unsupported | null; error: string | null; errorLine: number | null };
+
+function simulateKernel(code: string, kernelName: string | null, launch: string): Sim {
   let prog: Program;
   try { prog = parseProgram(code); }
-  catch (e) { const err = e as { message: string; line?: number }; return { prog: null, run: null, d: null, codeErr: (err.line ? `Line ${err.line}: ` : '') + err.message, errLine: err.line ?? null, launchErr: null, warn: null, launch }; }
-  if (!prog.kernels.length) return { prog, run: null, d: null, codeErr: 'No kernel found. Paste a def that uses thread_idx, block_idx or barrier().', errLine: null, launchErr: null, warn: null, launch };
-  const kernel = prog.kernels[Math.min(kernelIdx, prog.kernels.length - 1)];
-  if (!launch.trim()) launch = defaultLaunch(prog, kernel);
-  const warn = prog.constErrors.length ? `Line ${prog.constErrors[0].line}: ${prog.constErrors[0].message}` : null;
+  catch (e) { const err = e as { message: string; line?: number }; return { prog: null, run: null, d: null, unsupported: null, error: (err.line ? `Line ${err.line}: ` : '') + err.message, errorLine: err.line ?? null }; }
+  const k = prog.kernels.find(x => x.name === kernelName);
+  const u = prog.unsupported.find(x => x.name === kernelName);
+  if (u && !k) return { prog, run: null, d: null, unsupported: u, error: null, errorLine: null };
+  const kernel = k ?? prog.kernels[0];
+  if (!kernel) return { prog, run: null, d: null, unsupported: prog.unsupported[0] ?? null, error: prog.unsupported.length ? null : 'No GPU kernel found in this file.', errorLine: null };
   try {
     const run = simulate(prog, kernel, launch);
-    return { prog, run, d: derive(run), codeErr: null, errLine: null, launchErr: null, warn, launch };
+    return { prog, run, d: derive(run), unsupported: null, error: null, errorLine: null };
   } catch (e) {
     const err = e as { message: string; line?: number; launch?: boolean };
-    return { prog, run: null, d: null, codeErr: null, errLine: null, launchErr: (err.launch && err.line ? `Line ${err.line}: ` : '') + err.message, warn, launch };
+    return { prog, run: null, d: null, unsupported: null, error: (err.launch && err.line ? `Inputs line ${err.line}: ` : '') + err.message, errorLine: null };
   }
 }
 
+const launchFor = (code: string, entry: Entry | undefined, kernelName: string | null) => {
+  if (entry?.launch) return entry.launch;
+  try {
+    const prog = parseProgram(code);
+    const k = prog.kernels.find(x => x.name === kernelName) ?? prog.kernels[0];
+    if (!k) return '';
+    return launchFromMain(code, prog, k) ?? defaultLaunch(prog, k);
+  } catch { return ''; }
+};
+
+// The command-line flag (e.g. --tiled) whose branch in main() launches this kernel.
+function flagsFor(code: string, kernel: string | null) {
+  const hits = [...code.matchAll(/==\s*"(--[\w-]+)"/g)];
+  const flags = [...new Set(hits.map(m => m[1]))];
+  let best = flags[0] ?? '';
+  if (kernel) for (let i = 0; i < hits.length; i++) {
+    const seg = code.slice(hits[i].index, hits[i + 1]?.index ?? code.length);
+    if (new RegExp(`\\b${kernel}\\b`).test(seg)) { best = hits[i][1]; break; }
+  }
+  return { flags, best };
+}
+
 export default function App() {
-  const initial = useMemo(() => {
-    const s = loadSaved();
-    if (s?.code) return s;
-    const p = presets.find(x => x.id === 'p08') || presets[0];
-    return { code: p.code, launch: p.launch, preset: p.id, kernelIdx: 0 };
-  }, []);
-  const [code, setCode] = useState(initial.code);
-  const [draft, setDraft] = useState(initial.code);
-  const [launch, setLaunch] = useState(initial.launch);
-  const [preset, setPreset] = useState(initial.preset);
-  const [kernelIdx, setKernelIdx] = useState(initial.kernelIdx || 0);
+  const saved = useMemo(loadSaved, []);
+  const [files, setFiles] = useState<Entry[]>(BUNDLED);
+  const [server, setServer] = useState<ServerInfo | null>(null);
+  const [path, setPath] = useState(saved?.path ?? 'solutions/p08/p08.mojo');
+  const [code, setCode] = useState('');
+  const [original, setOriginal] = useState(''); // file content as loaded, to tell if it was edited
+  const [kernel, setKernel] = useState<string | null>(saved?.kernel ?? null);
+  const [launch, setLaunch] = useState('');
+  const [sim, setSim] = useState<Sim>({ prog: null, run: null, d: null, unsupported: null, error: null, errorLine: null });
   const [editing, setEditing] = useState(false);
-  const [ex, setEx] = useState<Exec>(() => execute(initial.code, initial.launch, initial.kernelIdx || 0));
-  const [t, setT] = useState(0);
-  const [view, setView] = useState<'tick' | 'run'>('tick');
-  const [scope, setScope] = useState<'focus' | 'all'>('focus');
-  const [focus, setFocus] = useState<number | null>(0);
-  const [cell, setCell] = useState<{ buf: number; idx: number } | null>(null);
-  const [hover, setHover] = useState<Hover>(null);
+  const [draft, setDraft] = useState({ code: '', launch: '' });
+  const [f, setF] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [speed, setSpeed] = useState('550');
-  const [tab, setTab] = useState('story');
+  const [hover, setHover] = useState<number | null>(null);
+  const [flag, setFlag] = useState('');
+  const [tool, setTool] = useState('none');
+  const [gpu, setGpu] = useState<{ busy: boolean; result: GpuResult | null }>({ busy: false, result: null });
 
-  const { run, d } = ex;
-  const last = run ? run.ticks.length - 1 : 0;
+  const entry = files.find(x => x.path === path);
 
-  const runNow = useCallback((c: string, l: string, k: number, p: string) => {
-    const r = execute(c, l, k);
-    setEx(r);
-    if (r.launch !== l) setLaunch(r.launch);
-    setT(0);
-    setPlaying(false);
-    setCell(null);
-    setFocus(f => (r.run && f != null && f < r.run.threads.length ? f : r.run ? 0 : null));
-    save({ code: c, launch: r.launch, preset: p, kernelIdx: k });
+  const apply = useCallback((c: string, k: string | null, l: string) => {
+    const s = simulateKernel(c, k, l);
+    setSim(s); setF(0); setPlaying(false); setHover(null);
+    const name = s.run?.kernel.name ?? s.unsupported?.name ?? k;
+    setKernel(name);
+    const fl = flagsFor(c, name);
+    setFlag(fl.best);
   }, []);
 
-  const loadPreset = (id: string) => {
-    const p = presets.find(x => x.id === id);
-    if (!p) { setPreset('custom'); setEditing(true); setDraft(code); return; }
-    setPreset(id); setCode(p.code); setDraft(p.code); setLaunch(p.launch); setKernelIdx(0); setEditing(false); setFocus(0); setView('tick');
-    runNow(p.code, p.launch, 0, id);
-  };
+  const open = useCallback(async (p: string, list: Entry[], srv: ServerInfo | null, preferKernel: string | null) => {
+    let c = '';
+    const e = list.find(x => x.path === p);
+    if (p === PASTED) c = loadSaved()?.pasted ?? '';
+    else if (srv && e && e.group !== 'demos') {
+      const r = await fetch(`/api/file?path=${encodeURIComponent(p)}`).then(x => x.json()).catch(() => null);
+      c = r?.code ?? '';
+    } else c = e?.code ?? BUNDLED.find(x => x.path === p)?.code ?? '';
+    if (!c && p !== PASTED) { const fb = list.find(x => x.path === 'solutions/p08/p08.mojo') ?? list[0]; if (fb && fb.path !== p) return open(fb.path, list, srv, null); }
+    setPath(p); setCode(c); setOriginal(c); setGpu({ busy: false, result: null }); setEditing(false);
+    let k = preferKernel;
+    try { const prog = parseProgram(c); if (!k || ![...prog.kernels, ...prog.unsupported].some(x => x.name === k)) k = prog.kernels[0]?.name ?? prog.unsupported[0]?.name ?? null; } catch { k = null; }
+    const l = launchFor(c, e, k);
+    setLaunch(l);
+    apply(c, k, l);
+    save({ path: p, kernel: k, pasted: p === PASTED ? c : loadSaved()?.pasted });
+  }, [apply]);
 
-  const onRun = () => {
-    const c = editing ? draft : code;
-    if (editing) { setCode(c); setEditing(false); }
-    let p = preset;
-    const pr = presets.find(x => x.id === preset);
-    if (pr && (pr.code !== c || pr.launch !== launch)) { p = 'custom'; setPreset('custom'); }
-    runNow(c, launch, kernelIdx, p);
-  };
+  // Startup: use the local server if this page was opened from it, otherwise the bundled files.
+  useEffect(() => {
+    let done = false;
+    (async () => {
+      let srv: ServerInfo | null = null, list = BUNDLED;
+      if (location.protocol.startsWith('http')) {
+        try {
+          const info = await fetch('/api/info', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null));
+          if (info?.server) {
+            const fl: Entry[] = await fetch('/api/files').then(r => r.json());
+            srv = { gpu: info.gpu, tools: info.tools };
+            list = fl;
+          }
+        } catch { /* no server */ }
+      }
+      if (done) return;
+      setServer(srv); setFiles(list);
+      open(saved?.path ?? 'solutions/p08/p08.mojo', list, srv, saved?.kernel ?? null);
+    })();
+    return () => { done = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const goTo = useCallback((k: number) => { setView('tick'); setT(Math.max(0, Math.min(last, k))); }, [last]);
-  const stepTo = (k: number) => { setPlaying(false); goTo(k); };
+  const { run, d, prog } = sim;
+  const fr = useMemo(() => (run ? frames(run) : []), [run]);
+  const last = Math.max(0, fr.length - 1);
+  const frame = fr[Math.min(f, last)];
 
-  // playback
-  const tRef = useRef(t);
-  tRef.current = t;
   useEffect(() => {
     if (!playing) return;
-    const id = setInterval(() => {
-      if (tRef.current >= last) { setPlaying(false); return; }
-      setT(tRef.current + 1);
-    }, +speed);
+    const id = setInterval(() => setF(x => { if (x >= last) { setPlaying(false); return x; } return x + 1; }), 1100);
     return () => clearInterval(id);
-  }, [playing, speed, last]);
-  const togglePlay = () => {
-    if (!run) return;
-    if (playing) { setPlaying(false); return; }
-    setView('tick');
-    if (t >= last) setT(0);
-    setPlaying(true);
-  };
-
-  // keyboard
+  }, [playing, last]);
+  const togglePlay = () => { if (playing) setPlaying(false); else { if (f >= last) setF(0); setPlaying(true); } };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const el = e.target as HTMLElement;
-      if (el.closest('textarea, input, [role="listbox"], [role="combobox"]')) return;
-      if (!run) return;
-      if (e.key === 'ArrowRight') { e.preventDefault(); stepTo(t + 1); }
-      else if (e.key === 'ArrowLeft') { e.preventDefault(); stepTo(t - 1); }
-      else if (e.key === 'Home') { e.preventDefault(); stepTo(0); }
-      else if (e.key === 'End') { e.preventDefault(); stepTo(last); }
-      else if (e.key === ' ' && !el.closest('button')) { e.preventDefault(); togglePlay(); }
+      if ((e.target as HTMLElement).closest('textarea, input, [role="listbox"]')) return;
+      if (e.key === 'ArrowRight') { e.preventDefault(); setPlaying(false); setF(x => Math.min(last, x + 1)); }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); setPlaying(false); setF(x => Math.max(0, x - 1)); }
+      if (e.key === ' ' && !(e.target as HTMLElement).closest('button')) { e.preventDefault(); togglePlay(); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  const onThread = (tid: number) => { setFocus(tid); setCell(null); if (scope === 'all') setScope('focus'); };
-  const onCell = (buf: number, idx: number) => { setCell(c => (c && c.buf === buf && c.idx === idx ? null : { buf, idx })); setTab('inspect'); };
-  const onDiag = (dg: Diag) => {
-    if (dg.tid != null) { setFocus(dg.tid); setCell(null); setTab('story'); }
-    else if (dg.buf != null && dg.idx != null) { setCell({ buf: dg.buf, idx: dg.idx }); setTab('inspect'); }
-    stepTo(Math.min(dg.tick, last));
+  const pickKernel = (k: string) => {
+    const l = launchFor(code, entry, k);
+    setLaunch(l); apply(code, k, l); setGpu(g => ({ ...g, result: null }));
+    save({ path, kernel: k, pasted: loadSaved()?.pasted });
+  };
+  const startEdit = () => { setDraft({ code, launch }); setEditing(true); };
+  const applyEdit = () => {
+    setCode(draft.code); setLaunch(draft.launch); setEditing(false);
+    let k = kernel;
+    try { const p = parseProgram(draft.code); if (![...p.kernels, ...p.unsupported].some(x => x.name === k)) k = p.kernels[0]?.name ?? null; } catch { /* shown by apply */ }
+    const l = draft.code !== code && draft.launch === launch ? launchFor(draft.code, entry, k) : draft.launch;
+    setLaunch(l);
+    apply(draft.code, k, l);
+    if (path === PASTED) save({ path, kernel: k, pasted: draft.code });
   };
 
-  const codeLines = code.split('\n');
-  const focusStep = run && d && focus != null && view === 'tick' ? d.stepAt[t].get(focus) ?? null : null;
-  const lineCounts = useMemo(() => {
-    if (!run || !d) return null;
-    if (view === 'run') { const m = new Map<number, number>(); d.lineCount.forEach(lc => lc.forEach((v, k) => m.set(k, (m.get(k) || 0) + v))); return m; }
-    return d.lineCount[t];
-  }, [run, d, t, view]);
-  const focusLabel = run && focus != null ? tShort(run, run.threads[focus]) : null;
-  const errs = run ? run.diags.filter(x => x.sev === 'error').length : 0;
-  const warns = run ? run.diags.filter(x => x.sev === 'warn').length : 0;
-  const kernel = ex.prog?.kernels[Math.min(kernelIdx, (ex.prog?.kernels.length || 1) - 1)];
+  const runOnGpu = async () => {
+    setGpu({ busy: true, result: null });
+    const edited = code !== original || path === PASTED || entry?.group === 'demos';
+    const body = { path: path === PASTED || entry?.group === 'demos' ? null : path, code: edited ? code : null, args: flag ? [flag] : [], tool: tool === 'none' ? null : tool };
+    try {
+      const r: GpuResult = await fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Kernel-Flow': '1' }, body: JSON.stringify(body) }).then(x => x.json());
+      setGpu({ busy: false, result: r });
+    } catch (e) { setGpu({ busy: false, result: { ok: false, error: `Could not reach the local server: ${(e as Error).message}` } }); }
+  };
+
+  const lines = code.split('\n');
+  const kernels = prog ? [...prog.kernels.map(k => ({ name: k.name, ok: true, line: k.line })), ...prog.unsupported.map(u => ({ name: u.name, ok: false, line: u.line }))].sort((a, b) => a.line - b.line) : [];
+  const kdef = prog?.kernels.find(k => k.name === kernel);
+  const udef = prog?.unsupported.find(k => k.name === kernel);
+  const range: [number, number] | null = kdef ? [kdef.line, kdef.endLine] : udef ? [udef.line, udef.endLine] : null;
+  const moving = frame?.kind === 'data' && run ? run.ticks[frame.tick].steps.filter(s => s.ev.length || s.xfer?.length) : [];
+  const example = moving.find(s => s.tid === hover) ?? moving[0];
+  const errors = run ? run.diags.filter(x => x.sev === 'error') : [];
+  const anyMasked = run && d ? run.threads.some(t => d.finalStep[t.id]?.cond === false && !d.threadSteps[t.id].some(x => x.step.ev.length || x.step.xfer?.length)) : false;
+  const { flags } = flagsFor(code, kernel);
+  const groups = ['solutions'].map(g => ({ g, items: files.filter(x => x.group === g) })).filter(x => x.items.length);
+  const label = (e: Entry) => e.title ?? (e.path.split('/').pop()!.replace('.mojo', '') === e.puzzle ? e.puzzle : `${e.puzzle} · ${e.path.split('/').pop()!.replace('.mojo', '')}`);
 
   return (
-    <TooltipProvider delayDuration={250}>
-      <div className="mx-auto flex max-w-[1680px] flex-col gap-4">
-        <header className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
-          <div className="flex items-center gap-3">
-            <div className="grid h-9 w-9 place-items-center rounded-lg bg-primary text-primary-foreground"><Cpu className="h-5 w-5" /></div>
-            <div>
-              <h1 className="text-lg font-bold leading-tight tracking-tight">Kernel Flow</h1>
-              <p className="text-xs text-muted-foreground">Follow a Mojo GPU kernel one thread and one tick at a time</p>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Select value={preset} onValueChange={loadPreset}>
-              <SelectTrigger className="w-[260px]" aria-label="Example kernel"><SelectValue placeholder="Choose an example" /></SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectLabel>Solved puzzles</SelectLabel>
-                  {presets.filter(p => !p.id.startsWith('bug')).map(p => <SelectItem key={p.id} value={p.id}>{p.title}</SelectItem>)}
-                </SelectGroup>
-                <SelectSeparator />
-                <SelectGroup>
-                  <SelectLabel>Bug demos</SelectLabel>
-                  {presets.filter(p => p.id.startsWith('bug')).map(p => <SelectItem key={p.id} value={p.id}>{p.title}</SelectItem>)}
-                </SelectGroup>
-                <SelectSeparator />
-                <SelectItem value="custom">Your own code</SelectItem>
-              </SelectContent>
-            </Select>
-            {ex.prog && ex.prog.kernels.length > 1 && (
-              <Select value={String(kernelIdx)} onValueChange={v => { const k = +v; setKernelIdx(k); const l = defaultLaunch(ex.prog!, ex.prog!.kernels[k]); setLaunch(l); runNow(code, l, k, 'custom'); setPreset('custom'); }}>
-                <SelectTrigger className="w-[220px]" aria-label="Kernel"><SelectValue /></SelectTrigger>
-                <SelectContent>{ex.prog.kernels.map((k, i) => <SelectItem key={i} value={String(i)}>{k.name}</SelectItem>)}</SelectContent>
-              </Select>
-            )}
-            <Button onClick={onRun}><Play />Run kernel</Button>
-          </div>
-        </header>
+    <div className="mx-auto flex max-w-[1500px] flex-col gap-4">
+      <header className="flex flex-wrap items-center gap-2">
+        <h1 className="mr-auto text-lg font-semibold tracking-tight">Kernel Flow</h1>
+        <Select value={path} onValueChange={p => open(p, files, server, null)}>
+          <SelectTrigger className="w-[210px]" aria-label="Puzzle file"><SelectValue placeholder="Choose a file" /></SelectTrigger>
+          <SelectContent>
+            {groups.map(({ g, items }, gi) => (
+              <SelectGroup key={g}>
+                {gi > 0 && <SelectSeparator />}
+                <SelectLabel>{GROUP_LABEL[g] ?? g}</SelectLabel>
+                {items.map(e => <SelectItem key={e.path} value={e.path}>{label(e)}</SelectItem>)}
+              </SelectGroup>
+            ))}
+            <SelectSeparator />
+            <SelectItem value={PASTED}>Paste your own code</SelectItem>
+          </SelectContent>
+        </Select>
+        {kernels.length > 1 && (
+          <Select value={kernel ?? ''} onValueChange={pickKernel}>
+            <SelectTrigger className="w-[250px]" aria-label="Kernel"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {kernels.map(k => <SelectItem key={k.name} value={k.name}>{k.name}{k.ok ? '' : ' (not simulated)'}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        )}
+      </header>
 
-        <main className="grid items-start gap-4 lg:grid-cols-[minmax(340px,440px)_minmax(0,1fr)]">
-          <div className="order-2 flex min-w-0 flex-col gap-4 lg:order-1 lg:sticky lg:top-4">
-            <CodePanel
-              code={editing ? draft : code}
-              editing={editing}
-              draft={draft}
-              onDraft={setDraft}
-              onToggleEdit={() => { if (editing) onRun(); else { setDraft(code); setEditing(true); } }}
-              onRun={onRun}
-              lineCounts={lineCounts}
-              focusStep={focusStep}
-              focusLabel={focusLabel || 'the thread'}
-              errLine={ex.errLine}
-              error={ex.codeErr}
-              warn={ex.warn}
-              kernelRange={kernel ? [kernel.line, kernel.endLine] : null}
-            />
-            <Card>
-              <CardHeader className="flex-row items-center justify-between space-y-0 px-4 py-3">
-                <div>
-                  <CardTitle className="text-sm">Launch</CardTitle>
-                  <CardDescription className="text-xs">Grid size, block size and the input buffers.</CardDescription>
-                </div>
-                <Button variant="ghost" size="sm" onClick={() => { if (ex.prog && kernel) setLaunch(defaultLaunch(ex.prog, kernel)); }}><RotateCcw />Reset</Button>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-2 px-4 pb-4">
-                <Textarea value={launch} onChange={e => setLaunch(e.target.value)} spellCheck={false} aria-label="Launch settings" className="min-h-[150px] font-mono text-[12.5px] leading-relaxed md:text-[12.5px]" onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); onRun(); } }} />
-                {ex.launchErr && <Alert variant="destructive" className="py-2"><AlertDescription className="text-xs">{ex.launchErr}</AlertDescription></Alert>}
-                <p className="text-xs leading-relaxed text-muted-foreground">
-                  One <code className="rounded bg-muted px-1">name = value</code> per line. Names from <code className="rounded bg-muted px-1">comptime</code> lines work. Helpers: <code className="rounded bg-muted px-1">zeros(n)</code> <code className="rounded bg-muted px-1">ones(n)</code> <code className="rounded bg-muted px-1">arange(n)</code> <code className="rounded bg-muted px-1">fill(n, v)</code> <code className="rounded bg-muted px-1">cumsum(x)</code> <code className="rounded bg-muted px-1">sum(x)</code>. Start a line with <code className="rounded bg-muted px-1">expect</code> to check a buffer after the run.
-                </p>
-              </CardContent>
-            </Card>
-          </div>
-
-          <div className="order-1 flex min-w-0 flex-col gap-4 lg:order-2">
-            {run && d ? (
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+        <Card className="order-2 flex flex-col overflow-hidden lg:order-1 lg:sticky lg:top-4 lg:h-[calc(100vh-6rem)]">
+          <div className="flex items-center gap-2 border-b px-3 py-2">
+            <span className="mr-auto truncate font-mono text-xs text-muted-foreground">{path === PASTED ? 'pasted code' : path}{code !== original && path !== PASTED ? ' · edited' : ''}</span>
+            {editing ? (
               <>
-                <Transport run={run} t={t} playing={playing} speed={speed} view={view} scope={scope} focusLabel={focusLabel} onTick={stepTo} onPlay={togglePlay} onSpeed={setSpeed} onView={v => { setPlaying(false); setView(v); }} onScope={s => { setScope(s); if (s === 'focus' && focus == null) setFocus(0); }} />
-                <Card className="overflow-hidden">
-                  <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2.5">
-                    {run.results.map(r => <Badge key={r.name} variant={r.ok ? 'ok' : 'destructive'}>{r.ok ? '✓' : '✕'} {r.name} {r.ok ? 'correct' : 'wrong'}</Badge>)}
-                    {errs > 0 && <Badge variant="destructive">{errs} error{errs > 1 ? 's' : ''}</Badge>}
-                    {warns > 0 && <Badge variant="warn">{warns} warning{warns > 1 ? 's' : ''}</Badge>}
-                    {!errs && !warns && <Badge variant="ok">no problems found</Badge>}
-                    {run.results.some(r => r.ok) && run.diags.some(x => x.kind === 'race') && (
-                      <span className="basis-full text-xs text-destructive">The output matched here only because this simulator runs threads in a fixed order. On real hardware a race can give a different answer on every run.</span>
-                    )}
-                    <span className="ml-auto text-[11px] text-muted-foreground">Hover a thread to see every cell it touches; hover a cell to see which threads touch it.</span>
-                  </div>
-                  <div className="overflow-x-auto">
-                    <Stage run={run} d={d} t={t} view={view} scope={scope} focus={focus} cell={cell} hover={hover} onHover={setHover} onThread={onThread} onCell={onCell} />
-                  </div>
-                  <Legend />
-                </Card>
-                <Card>
-                  <Tabs value={tab} onValueChange={setTab}>
-                    <div className="overflow-x-auto border-b px-3 py-2">
-                      <TabsList>
-                        <TabsTrigger value="story">Story</TabsTrigger>
-                        <TabsTrigger value="tick">All threads</TabsTrigger>
-                        <TabsTrigger value="inspect">Inspector</TabsTrigger>
-                        <TabsTrigger value="checks">Checks{(errs + warns) > 0 && <span className="rounded-full bg-destructive px-1.5 text-[10px] font-bold text-destructive-foreground">{errs + warns}</span>}</TabsTrigger>
-                        <TabsTrigger value="traffic">Traffic</TabsTrigger>
-                      </TabsList>
-                    </div>
-                    <div className="max-h-[460px] overflow-auto">
-                      <TabsContent value="story" className="mt-0"><StoryPanel run={run} d={d} t={view === 'run' ? last : t} code={codeLines} focus={focus} onFocus={onThread} /></TabsContent>
-                      <TabsContent value="tick" className="mt-0"><TickPanel run={run} d={d} t={t} code={codeLines} view={view} focus={focus} onFocus={tid => { onThread(tid); setTab('story'); }} /></TabsContent>
-                      <TabsContent value="inspect" className="mt-0"><InspectorPanel run={run} d={d} t={t} code={codeLines} focus={focus} cell={cell} onTick={stepTo} /></TabsContent>
-                      <TabsContent value="checks" className="mt-0"><ChecksPanel run={run} onDiag={onDiag} onTick={stepTo} /></TabsContent>
-                      <TabsContent value="traffic" className="mt-0"><TrafficPanel run={run} onFocus={tid => { onThread(tid); setTab('story'); }} /></TabsContent>
-                    </div>
-                  </Tabs>
-                </Card>
+                <Button size="sm" variant="ghost" onClick={() => setEditing(false)}><X />Cancel</Button>
+                <Button size="sm" onClick={applyEdit}><Check />Apply</Button>
               </>
             ) : (
-              <Card className="grid min-h-[320px] place-items-center p-8 text-center text-sm text-muted-foreground">
-                {ex.codeErr || ex.launchErr ? 'Fix the error on the left, then press Run kernel.' : 'Pick an example or paste a kernel, then press Run kernel.'}
-              </Card>
+              <Button size="sm" variant="outline" onClick={startEdit}><Pencil />Edit</Button>
             )}
           </div>
-        </main>
-      </div>
-    </TooltipProvider>
-  );
-}
+          {editing ? (
+            <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
+              <Textarea value={draft.code} onChange={e => setDraft(x => ({ ...x, code: e.target.value }))} spellCheck={false} aria-label="Kernel code" className="min-h-[320px] flex-1 font-mono text-[12.5px] leading-relaxed md:text-[12.5px]" style={{ whiteSpace: 'pre', tabSize: 4 }} />
+              <label className="text-xs text-muted-foreground" htmlFor="kf-launch">Inputs: grid, block and each kernel argument (read from main() when possible)</label>
+              <Textarea id="kf-launch" value={draft.launch} onChange={e => setDraft(x => ({ ...x, launch: e.target.value }))} spellCheck={false} className="min-h-[120px] font-mono text-[12px] leading-relaxed md:text-[12px]" />
+            </div>
+          ) : (
+            <div className="relative h-[55vh] min-h-0 flex-1 lg:h-auto">
+              {code ? (
+                <CodeView code={code} kernelRange={range} activeLine={frame?.kind === 'data' ? frame.line ?? null : null} focusLine={example && hover === example.tid ? example.line : null} errorLine={sim.errorLine} />
+              ) : (
+                <p className="p-4 text-sm text-muted-foreground">Click Edit and paste a Mojo file with a GPU kernel.</p>
+              )}
+            </div>
+          )}
+        </Card>
 
-function Legend() {
-  const item = (swatch: React.ReactNode, text: string) => <span className="inline-flex items-center gap-1.5">{swatch}{text}</span>;
-  return (
-    <div className="flex flex-wrap gap-x-4 gap-y-1.5 border-t px-4 py-2.5 text-[11px] text-muted-foreground">
-      {item(<i className="h-3 w-3 rounded-sm border border-read bg-read-soft" />, 'read this tick')}
-      {item(<i className="h-3 w-3 rounded-sm bg-write" />, 'written this tick')}
-      {item(<i className="h-3 w-4 rounded border border-run/60 bg-run-soft" />, 'thread running')}
-      {item(<i className="hatch h-3 w-4 rounded border border-wait" />, 'waiting at barrier')}
-      {item(<i className="h-3 w-4 rounded border border-dashed border-masked bg-masked-soft" />, 'masked: its if was False')}
-      {item(<i className="h-3 w-4 rounded border border-dashed opacity-60" />, 'finished')}
-      {item(<i className="h-3 w-3 rounded-sm border border-dashed border-destructive bg-destructive/10" />, 'out of bounds')}
-      {item(<span className="font-mono">·</span>, 'uninitialized')}
-      {item(<span className="font-mono text-[10px]">↦6</span>, 'the index a thread computes')}
+        <div className="order-1 flex min-w-0 flex-col gap-4 lg:order-2">
+          {run && d && frame ? (
+            <>
+              <Card className="overflow-x-auto">
+                <Flow run={run} d={d} frame={frame} hoverThread={hover} onHoverThread={setHover} />
+              </Card>
+              <div className="flex items-center gap-4">
+                <Button size="icon" variant="outline" onClick={togglePlay} aria-label={playing ? 'Pause' : 'Play'}>{playing ? <Pause /> : <Play />}</Button>
+                <Slider disabled={last === 0} value={[Math.min(f, last)]} min={0} max={Math.max(1, last)} step={1} onValueChange={([v]) => { setPlaying(false); setF(v); }} aria-label="Step" />
+                <span className="w-14 shrink-0 text-right font-mono text-sm tabular-nums text-muted-foreground">{Math.min(f, last)} / {last}</span>
+              </div>
+              <div className="flex min-h-[4.5rem] flex-col gap-2">
+                {frame.kind === 'start' && (
+                  <p className="text-[15px]">
+                    {run.threads.length} threads{run.blocks.length > 1 ? ` in ${run.blocks.length} blocks` : ''} run <code className="text-run">{run.kernel.name}</code> at the same time. Each one uses its <code className="text-run">thread_idx</code> to pick which data it moves.
+                    {anyMasked && <span className="text-muted-foreground"> Faded threads do no work: their if-condition is False.</span>}
+                  </p>
+                )}
+                {frame.kind === 'barrier' && (
+                  <p className="text-[15px]"><code className="text-wait">barrier()</code>: every thread in the block waits here until all of them arrive, so the shared memory they just filled is complete before anyone reads it.</p>
+                )}
+                {frame.kind === 'data' && (
+                  <>
+                    <p className="text-[15px]">
+                      <span className="text-muted-foreground">{frame.threads} thread{frame.threads > 1 ? 's' : ''} run line {frame.line}: </span>
+                      <code className="rounded bg-muted px-1.5 py-0.5 text-[13px]">{(lines[(frame.line ?? 1) - 1] || '').trim()}</code>
+                    </p>
+                    {frame.exchange && <p className="text-sm text-muted-foreground">Values pass directly between threads' registers inside a warp (32 threads), without going through memory.</p>}
+                    {example?.expl && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs text-muted-foreground">{hover === example.tid ? '' : 'e.g. '}{tShort(run, run.threads[example.tid])}:</span>
+                        <Breakdown expl={example.expl} size="sm" />
+                      </div>
+                    )}
+                  </>
+                )}
+                {errors.length > 0 && <p className="text-sm text-destructive">{errors[0].msg}{errors.length > 1 ? ` (+${errors.length - 1} more like this)` : ''}</p>}
+              </div>
+            </>
+          ) : (
+            <Card className="p-6 text-sm leading-relaxed">
+              {sim.unsupported ? (
+                <>
+                  <p className="font-medium"><code>{sim.unsupported.name}</code> can't be stepped through in the browser yet.</p>
+                  <p className="mt-1 text-muted-foreground">It uses something the simulator doesn't model (line {sim.unsupported.errLine}: {sim.unsupported.message}). Nested functions, vectorized SIMD loads, mbarriers, clusters and tensor cores are not simulated. {server ? 'You can still run it on your GPU below.' : 'Start the local server to run it on your GPU.'}</p>
+                </>
+              ) : (
+                <p className="text-destructive">{sim.error ?? 'Loading…'}</p>
+              )}
+              {sim.run === null && sim.error && <Button variant="link" className="px-0" onClick={startEdit}>Edit the code or inputs</Button>}
+            </Card>
+          )}
+
+          <Card className="flex flex-col gap-3 p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Cpu className="h-4 w-4 text-muted-foreground" />
+              <span className="mr-auto text-sm font-medium">{server ? `Run on your GPU${server.gpu ? ` · ${server.gpu}` : ''}` : 'Run on your GPU'}</span>
+              {server && flags.length > 0 && (
+                <Select value={flag || '__none'} onValueChange={v => setFlag(v === '__none' ? '' : v)}>
+                  <SelectTrigger className="h-8 w-[170px] text-xs" aria-label="Command-line flag"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none">no flag</SelectItem>
+                    {flags.map(x => <SelectItem key={x} value={x}>{x}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              )}
+              {server && (
+                <Select value={tool} onValueChange={setTool}>
+                  <SelectTrigger className="h-8 w-[150px] text-xs" aria-label="Sanitizer check"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">plain run</SelectItem>
+                    {server.tools.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              )}
+              {server && <Button size="sm" onClick={runOnGpu} disabled={gpu.busy || !code}>{gpu.busy ? <Loader2 className="animate-spin" /> : <Play />}{gpu.busy ? 'Running…' : 'Run'}</Button>}
+            </div>
+            {!server && (
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                The diagram is simulated in your browser. To run the real kernel on your GPU, start the local server from the repo: <code className="rounded bg-muted px-1">python3 tools/kernel-flow/server.py</code>, then open <code className="rounded bg-muted px-1">http://127.0.0.1:8765</code>.
+              </p>
+            )}
+            {gpu.result && (
+              <div className="flex flex-col gap-2">
+                <p className={cn('text-sm', gpu.result.ok ? 'text-ok' : 'text-destructive')}>
+                  {gpu.result.error ?? (gpu.result.ok ? `✓ Finished in ${gpu.result.seconds} s` : `✕ Exited with code ${gpu.result.exitCode} after ${gpu.result.seconds} s`)}
+                  {gpu.result.command && <span className="ml-2 font-mono text-xs text-muted-foreground">{gpu.result.command}</span>}
+                </p>
+                {(gpu.result.stdout || gpu.result.stderr) && (
+                  <pre className="max-h-72 overflow-auto rounded-md bg-muted p-3 font-mono text-[11.5px] leading-relaxed">{[gpu.result.stdout, gpu.result.stderr].filter(Boolean).join('\n').trim()}</pre>
+                )}
+              </div>
+            )}
+          </Card>
+          <p className="text-xs text-muted-foreground">Blue arrows read memory, orange arrows write it, purple arrows pass values between threads (warp shuffles and reductions). Hover a thread to follow it. ← → to step.</p>
+        </div>
+      </div>
     </div>
   );
 }

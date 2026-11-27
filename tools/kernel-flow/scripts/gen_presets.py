@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate src/presets.json from the solved puzzles in problems/."""
+"""Regenerate src/presets.json (test fixtures) and src/library.json (the solutions, bundled into the page)."""
 import json, re
 from pathlib import Path
 
@@ -8,10 +8,8 @@ ROOT = HERE.parent.parent.parent
 SRC = HERE.parent / "src"
 
 def anchor(path):
-    src = (ROOT / "problems" / path).read_text()
-    body = re.search(r"# ANCHOR: \w+\n(.*?)# ANCHOR_END", src, re.S).group(1)
-    body = re.sub(r"\n[ \t]*# FILL ME IN.*", "", body)
-    return re.sub(r"\n{3,}", "\n\n", body).strip() + "\n"
+    """The whole solution file (the parser skips main() and anything else it does not need)."""
+    return (ROOT / "solutions" / path).read_text()
 
 L = lambda *lines: "grid  = BLOCKS_PER_GRID\nblock = THREADS_PER_BLOCK\n" + "\n".join(lines)
 PRESETS = [
@@ -36,6 +34,12 @@ def main():
     presets.append(json.loads((HERE / "demo_race.json").read_text()))
     (SRC / "presets.json").write_text(json.dumps(presets, indent=1, ensure_ascii=False) + "\n")
     print("wrote", SRC / "presets.json", len(presets), "presets")
+
+    # Library: every reference solution in solutions/. The page loads these when no local server is running.
+    files = [dict(path=str(f.relative_to(ROOT)), group="solutions", puzzle=f.parent.name, code=f.read_text())
+             for f in sorted((ROOT / "solutions").glob("p*/*.mojo"))]
+    (SRC / "library.json").write_text(json.dumps(files, ensure_ascii=False) + "\n")
+    print("wrote", SRC / "library.json", len(files), "files")
 
 
 if __name__ == "__main__":
