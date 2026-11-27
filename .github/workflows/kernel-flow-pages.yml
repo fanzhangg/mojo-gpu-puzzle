@@ -1,0 +1,57 @@
+# Builds tools/kernel-flow and publishes it to GitHub Pages.
+name: Kernel Flow Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/kernel-flow/**'
+      - 'solutions/**'
+      - '.github/workflows/kernel-flow-pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: kernel-flow-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/kernel-flow
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/kernel-flow/package-lock.json
+      - run: npm ci
+      - name: Bundle the current solutions
+        run: python3 scripts/gen_presets.py
+      - run: npm test
+      - run: npm run build
+      - name: Assemble site
+        run: |
+          mkdir -p _site
+          cp kernel-flow.html _site/index.html
+          touch _site/.nojekyll
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: tools/kernel-flow/_site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
