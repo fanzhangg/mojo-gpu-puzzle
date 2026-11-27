@@ -46,6 +46,26 @@ def conv_1d_simple[
     var global_i = block_dim.x * block_idx.x + thread_idx.x
     var local_i = thread_idx.x
     # FILL ME IN (roughly 14 lines)
+    var shared_a = stack_allocation[dtype=dtype, address_space=.SHARED](
+        row_major[TPB]()
+    )
+    var shared_b = stack_allocation[dtype=dtype, address_space=.SHARED](
+        row_major[CONV]()
+    )
+
+    if global_i < SIZE:
+        shared_a[local_i] = rebind[Scalar[dtype]](a[global_i])
+    if local_i < CONV:
+        shared_b[local_i] = rebind[Scalar[dtype]](b[local_i])
+
+    barrier()
+
+    if global_i < SIZE:
+        var local_sum: output.ElementType = 0
+        comptime for j in range(CONV):
+            if local_i + j < SIZE:
+                local_sum += shared_a[local_i + j] * shared_b[j]
+        output[global_i] = local_sum
 
 
 # ANCHOR_END: conv_1d_simple
@@ -75,6 +95,39 @@ def conv_1d_block_boundary[
     var global_i = block_dim.x * block_idx.x + thread_idx.x
     var local_i = thread_idx.x
     # FILL ME IN (roughly 18 lines)
+    # Shared memory: TPB elements for this block + (CONV_2 - 1) halo elements
+    var shared_a = stack_allocation[dtype=dtype, address_space=.SHARED](
+        row_major[TPB + CONV_2 - 1]()
+    )
+    var shared_b = stack_allocation[dtype=dtype, address_space=.SHARED](
+        row_major[CONV_2]()
+    )
+
+    # Main load (zero-pad past the end)
+    if global_i < SIZE_2:
+        shared_a[local_i] = rebind[Scalar[dtype]](a[global_i])
+    else:
+        shared_a[local_i] = 0
+
+    # Halo: the first CONV_2 - 1 threads load elements of the next block
+    if local_i < CONV_2 - 1:
+        var next_idx = global_i + TPB
+        if next_idx < SIZE_2:
+            shared_a[TPB + local_i] = rebind[Scalar[dtype]](a[next_idx])
+        else:
+            shared_a[TPB + local_i] = 0
+
+    if local_i < CONV_2:
+        shared_b[local_i] = rebind[Scalar[dtype]](b[local_i])
+
+    barrier()
+
+    if global_i < SIZE_2:
+        var local_sum: output.ElementType = 0
+        comptime for j in range(CONV_2):
+            if global_i + j < SIZE_2:
+                local_sum += shared_a[local_i + j] * shared_b[j]
+        output[global_i] = local_sum
 
 
 # ANCHOR_END: conv_1d_block_boundary
