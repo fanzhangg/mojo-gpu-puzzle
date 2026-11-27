@@ -33,8 +33,8 @@ jobs:
           cache: npm
           cache-dependency-path: tools/kernel-flow/package-lock.json
       - run: npm ci
-      - name: Bundle the current solutions
-        run: python3 scripts/gen_presets.py
+      - name: Copy the current solution kernels
+        run: python3 scripts/gen_kernels.py
       - run: npm test
       - run: npm run build
       - name: Assemble site
