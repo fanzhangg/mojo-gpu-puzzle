@@ -32,9 +32,9 @@ function rows(sel, stage) {
     const live = k === 0 ? TPB : strides[k - 1];
     out.push({
       id: `L${k}`,
-      label: k === 0 ? 'cache' : L(`stride ${strides[k - 1]}`, `步长 ${strides[k - 1]}`),
+      label: k === 0 ? 'cache' : L(`after stride ${strides[k - 1]}`, `步长 ${strides[k - 1]} 之后`),
       kind: 'shared',
-      cells: lv[k].map((v, i) => (i >= live ? cell(null, 'muted') : cell(v, k === shown && stage <= 3 ? (i === 0 ? 'write' : 'focus') : i === 0 ? 'focus' : 'muted'))),
+      cells: lv[k].map((v, i) => (i >= live ? cell(v, 'muted') : cell(v, k === shown && stage <= 3 ? (i === 0 ? 'write' : 'focus') : i === 0 ? 'focus' : 'muted'))),
     });
   }
   out.push({
@@ -55,7 +55,7 @@ function treeArrows(k) {
 
 const round = k => ({
   name: L(`Stride ${strides[k - 1]}`, `步长 ${strides[k - 1]}`),
-  lines: ['while stride > 0', 'if local_i < stride', 'cache[local_i] += cache[local_i + stride]', 'stride //= 2'],
+  lines: ['while stride > 0', 'if local_i < stride', 'cache[local_i] += cache[local_i + stride]', '        barrier()', 'stride //= 2'],
   scene(sel) {
     const s = strides[k - 1];
     const lv = levelsOf(sel);
@@ -63,8 +63,8 @@ const round = k => ({
       rows: rows(sel, k),
       arrows: treeArrows(k),
       say: L(
-        `${s === 1 ? 'Thread 0 adds the value 1 place to its right' : `Threads 0–${s - 1} each add the value ${s} places to their right`}, exactly like the dot product in Puzzle 12, then \`barrier()\`. The other 3 blocks do the same for their rows at the same time.`,
-        `${s === 1 ? '线程 0 把右边 1 格的值加到自己的格子里' : `线程 0–${s - 1} 各自把右边第 ${s} 格的值加到自己的格子里`}，和第 12 题的点积完全一样，然后 \`barrier()\`。另外 3 个 block 同时对各自的行做同样的事。`,
+        `${s === 1 ? 'Thread 0 adds the value 1 place to its right' : `Threads 0–${s - 1} each add the value ${s} places to their right`}, exactly like the dot product in Puzzle 12, then \`barrier()\`. Each row is the same \`cache\`, updated in place; cells ${s}–${TPB - 1} keep their old values (grey) but are no longer read. The other 3 blocks do the same for their rows at the same time.`,
+        `${s === 1 ? '线程 0 把右边 1 格的值加到自己的格子里' : `线程 0–${s - 1} 各自把右边第 ${s} 格的值加到自己的格子里`}，和第 12 题的点积完全一样，然后 \`barrier()\`。每一行都是同一个 \`cache\` 被原地更新；第 ${s}–${TPB - 1} 格的旧值还在（灰色），只是不再被读取。另外 3 个 block 同时对各自的行做同样的事。`,
       ),
       math: range(s).map(i => `cache[${i}] = ${fmt(lv[k - 1][i])} + ${fmt(lv[k - 1][i + s])} = ${fmt(lv[k][i])}`).join('\n'),
     };

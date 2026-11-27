@@ -5,6 +5,8 @@ export const tr = (t: Text | undefined, lang: Lang) => (t == null ? '' : typeof 
 export const UI = {
   tagline: { en: "How each Mojo GPU puzzle's solution moves data, one output at a time.", zh: '逐题演示 Mojo GPU 谜题的解法如何搬运数据，一次只看一个输出。' },
   puzzles: { en: 'Puzzles', zh: '题目' },
+  book: { en: 'Read the puzzle', zh: '阅读原题' },
+  skipped: { en: 'Puzzles about debugging, profiling, MAX and hardware details (09–10, 17–23, 28+) are not about how data moves, so they are not here.', zh: '关于调试、性能分析、MAX 和硬件细节的题目（09–10、17–23、28 以后）不涉及数据如何流动，所以这里没有收录。' },
   puzzle: { en: 'Puzzle', zh: '第' },
   puzzleSuffix: { en: '', zh: '题' },
   task: { en: 'Task', zh: '题目' },

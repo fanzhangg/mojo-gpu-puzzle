@@ -22,7 +22,7 @@ function rows(sel, stage) {
     },
     {
       id: 'shared', label: 'shared', kind: 'shared', groups: BLOCKS, groupLabel: g => L(`block ${g}'s shared memory`, `block ${g} 的共享内存`),
-      cells: range(SIZE).map(i => cell(a[i], i === sel ? (stage === 0 ? 'write' : stage === 2 ? 'read' : 'focus') : mine(i) ? undefined : 'muted', { idx: String(localOf(i)) })),
+      cells: range(SIZE).map(i => cell(a[i], i === sel ? (stage === 0 ? 'write' : stage === 2 ? 'read' : 'focus') : mine(i) ? undefined : 'muted', { idx: String(localOf(i)), note: L(`from a[${i}]`, `来自 a[${i}]`) })),
     },
     {
       id: 'output', label: 'output', kind: 'global',

@@ -43,7 +43,7 @@ const round = k => {
         arrows,
         say: L(
           `Every lane swaps its current maximum with the lane whose number differs in one bit: its partner is lane XOR ${o}. Lane ${sel} pairs with lane ${p}, and both keep the larger value. After this round each lane holds the maximum of a group of ${span} lanes${k === offsets.length ? ', which is now the whole warp' : ''}.`,
-          `每个 lane 和编号只差一位的 lane 交换当前最大值：搭档是 lane XOR ${o}。lane ${sel} 和 lane ${p} 配对，两者都保留较大的值。这一轮之后，每个 lane 都持有 ${span} 个 lane 一组中的最大值${k === offsets.length ? '，也就是整个 warp 的最大值' : ''}。`,
+          `每个 lane 和编号的二进制只差一个比特的 lane 交换当前最大值：搭档是 lane XOR ${o}。lane ${sel} 和 lane ${p} 配对，两者都保留较大的值。这一轮之后，每个 lane 都持有 ${span} 个 lane 一组中的最大值${k === offsets.length ? '，也就是整个 warp 的最大值' : ''}。`,
         ),
         math: `lane ${sel}:  partner = ${sel} XOR ${o} = ${p}\nmax_val = max(${fmt(vals[k - 1][sel])}, ${fmt(vals[k - 1][p])}) = ${fmt(vals[k][sel])}`,
       };
@@ -62,7 +62,7 @@ export default {
   ),
   idea: L(
     'In each round, every lane exchanges with a partner whose lane number differs in one bit (`shuffle_xor`) and keeps the larger value. With partners 16, 8, 4, 2, 1 apart, 5 rounds (log₂ 32) are enough, and unlike a tree, every lane ends up with the answer, not just lane 0.',
-    '每一轮，每个 lane 和编号只差一位的搭档交换数据（`shuffle_xor`），保留较大的值。搭档距离依次为 16、8、4、2、1，5 轮（log₂ 32）就够了；而且和树形归约不同，最后每个 lane 都拿到答案，而不只是 lane 0。',
+    '每一轮，每个 lane 和编号的二进制只差一个比特的搭档交换数据（`shuffle_xor`），保留较大的值。搭档距离依次为 16、8、4、2、1，5 轮（log₂ 32）就够了；而且和树形归约不同，最后每个 lane 都拿到答案，而不只是 lane 0。',
   ),
   data: {
     launch: L('1 block of 32 threads = one warp', '1 个 block，32 个线程，即一个 warp'),

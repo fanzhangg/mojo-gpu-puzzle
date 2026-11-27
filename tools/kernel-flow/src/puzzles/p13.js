@@ -109,8 +109,8 @@ export default {
           rows: base(sel, 2),
           arrows,
           say: L(
-            `Thread ${sel} multiplies its window \`${span}\` by the kernel and adds the products in a register (\`local_sum\`). Thread ${sel + 1} does the same one cell to the right${skipped.length ? `. Near the end the window runs off the array, so the \`if\` skips j = ${list(skipped)}` : ''}.`,
-            `线程 ${sel} 把自己的窗口 \`${span}\` 与卷积核逐项相乘，并在寄存器（\`local_sum\`）里累加。线程 ${sel + 1} 在右边一格做同样的事${skipped.length ? `。窗口在末尾超出了数组，所以 \`if\` 跳过了 j = ${listZh(skipped)}` : ''}。`,
+            `Thread ${sel} multiplies its window \`${span}\` by the kernel and adds the products in a register (\`local_sum\`). ${sel + 1 < SIZE ? `Thread ${sel + 1} does the same one cell to the right` : 'This is the last output; the other threads did the same for theirs'}${skipped.length ? `. Near the end the window runs off the array, so the \`if\` skips j = ${list(skipped)}` : ''}.`,
+            `线程 ${sel} 把自己的窗口 \`${span}\` 与卷积核逐项相乘，并在寄存器（\`local_sum\`）里累加。${sel + 1 < SIZE ? `线程 ${sel + 1} 在右边一格做同样的事` : '这是最后一个输出，其他线程已对各自的输出做了同样的事'}${skipped.length ? `。窗口在末尾超出了数组，所以 \`if\` 跳过了 j = ${listZh(skipped)}` : ''}。`,
           ),
           math: `local_sum = ${js.map(j => `${fmt(a[sel + j])}·${fmt(b[j])}`).join(' + ')} = ${fmt(result(sel))}`,
         };

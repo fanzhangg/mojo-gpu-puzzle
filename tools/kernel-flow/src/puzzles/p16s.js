@@ -20,7 +20,7 @@ function rows(sel, stage) {
     { id: 'a', label: 'a', kind: 'global', cols: SIZE, cells: A.map((v, i) => cell(v, stage === 0 ? (i === sel ? 'read' : undefined) : 'muted', { idx: `${rc(i)[0]},${rc(i)[1]}` })) },
     { id: 'b', label: 'b', kind: 'global', cols: SIZE, cells: B.map((v, i) => cell(v, stage === 0 ? (i === sel ? 'read' : undefined) : 'muted', { idx: `${rc(i)[0]},${rc(i)[1]}` })) },
     {
-      id: 'threads', label: L('threads', '线程'), kind: 'threads', cols: TPB,
+      id: 'threads', label: L('threads (x,y)', '线程 (x,y)'), kind: 'threads', cols: TPB,
       cells: range(TPB * TPB).map(t => {
         const x = t % TPB, y = Math.floor(t / TPB);
         if (!(x < SIZE && y < SIZE)) return cell(`${x},${y}`, 'idle', { note: L('no cell', '无元素') });

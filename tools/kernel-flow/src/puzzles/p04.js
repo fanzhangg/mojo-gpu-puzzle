@@ -19,7 +19,7 @@ function rows(sel, stage) {
       cells: a.map((v, k) => cell(v, k === sel ? (stage === 1 ? 'read' : 'focus') : 'muted', { note: k === sel && stage >= 1 ? `${rc(k)[0]}×${SIZE}+${rc(k)[1]}` : undefined })),
     },
     {
-      id: 'threads', label: L('threads', '线程'), kind: 'threads', cols: TB,
+      id: 'threads', label: L('threads (x,y)', '线程 (x,y)'), kind: 'threads', cols: TB,
       cells: range(TB * TB).map(t => {
         const y = Math.floor(t / TB), x = t % TB;
         const live = y < SIZE && x < SIZE;
@@ -54,7 +54,7 @@ export default {
       { name: 'size', values: 'Int = 2', note: L('matrix width and height', '矩阵的宽和高') },
     ],
   },
-  pick: { row: 'output', initial: 2, hint: L('Click an output cell; its [row,col] label is above it.', '点击一个输出格子，它上方标着 [行,列]。') },
+  pick: { row: 'output', initial: 2, hint: L('Click an output cell; its [row,col] label is above it. Threads are labelled the other way round, x,y = col,row.', '点击一个输出格子，它上方标着 [行,列]。线程的标签顺序相反：x,y 即 列,行。') },
   stages: [
     {
       name: L('Row and column', '行和列'),

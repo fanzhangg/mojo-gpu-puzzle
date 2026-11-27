@@ -35,8 +35,8 @@ export default {
     '给一个只有 4 个元素的数组每个元素加 10：`output[i] = a[i] + 10`，但启动了 8 个线程。',
   ),
   idea: L(
-    'You often launch more threads than there is data (block sizes come in fixed steps). The extra threads must do nothing, so every thread first checks `i < size`. Without that guard, threads 4–7 would read and write memory past the end of the arrays.',
-    '启动的线程数常常比数据多（block 的大小只能取固定的几档）。多出来的线程什么都不能做，所以每个线程先检查 `i < size`。没有这个检查，线程 4–7 就会读写数组末尾之外的内存。',
+    'You often launch more threads than there is data (the thread count is rounded up to whole blocks, and the data size is rarely an exact multiple of the block size). The extra threads must do nothing, so every thread first checks `i < size`. Without that guard, threads 4–7 would read and write memory past the end of the arrays.',
+    '启动的线程数常常比数据多（线程数按整个 block 向上取整，而数据量很少正好是 block 大小的整数倍）。多出来的线程什么都不能做，所以每个线程先检查 `i < size`。没有这个检查，线程 4–7 就会读写数组末尾之外的内存。',
   ),
   data: {
     launch: L('1 block of 8 threads, for only 4 elements', '1 个 block，8 个线程，但只有 4 个元素'),

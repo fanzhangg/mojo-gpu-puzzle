@@ -9,6 +9,24 @@ you click a cell, and it shows only the data that cell depends on, instead of dr
 copy of the same pattern. It steps through the **stages of the algorithm** (load, wait, compute,
 write), not through lines of code; the code panel highlights the lines of the current stage.
 
+## Run it
+
+**Online:** open **https://fanzhangg.github.io/mojo-gpu-puzzle/**. Every push to `main` that touches
+`tools/kernel-flow/` or `solutions/` rebuilds and redeploys it.
+
+**Locally** (Node.js 18+), from `tools/kernel-flow/`:
+
+```sh
+npm install
+npm run dev     # live preview at the URL Vite prints (http://localhost:5173 by default)
+```
+
+Or build the single-file page and open it directly in a browser, no server needed:
+
+```sh
+npm run build   # writes kernel-flow.html
+```
+
 Every diagram is designed against one question: *would a GPU beginner understand this algorithm better
 with the picture than without it?*
 

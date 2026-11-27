@@ -32,8 +32,8 @@ export default {
     '求前缀和：对一个 warp 中的 32 个值，`output[i] = input[0] + input[1] + … + input[i]`。',
   ),
   idea: L(
-    'Each lane needs the sum of its own value and every lane to its left. `prefix_sum()` does this across the warp\'s registers in one call; Puzzle 14 needed shared memory and a barrier after every step for the same result.',
-    '每个 lane 需要自己和左边所有 lane 的值之和。`prefix_sum()` 一次调用就在 warp 的寄存器之间完成；第 14 题为了同样的结果，需要共享内存，而且每一步之后都要 barrier。',
+    'Each lane needs the sum of its own value and every lane to its left. `prefix_sum()` does this across the warp\'s registers in one call; Puzzle 14 needed shared memory and a barrier after every step for the same result. The idea is the same offset-1, 2, 4, … scan as Puzzle 14, with lanes passing values by shuffle instead of through shared memory.',
+    '每个 lane 需要自己和左边所有 lane 的值之和。`prefix_sum()` 一次调用就在 warp 的寄存器之间完成；第 14 题为了同样的结果，需要共享内存，而且每一步之后都要 barrier。思路和第 14 题偏移 1、2、4……的扫描相同，只是 lane 之间用 shuffle 传值，而不经过共享内存。',
   ),
   data: {
     launch: L('1 block of 32 threads = one warp', '1 个 block，32 个线程，即一个 warp'),

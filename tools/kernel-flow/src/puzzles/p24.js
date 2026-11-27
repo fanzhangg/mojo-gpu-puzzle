@@ -33,8 +33,8 @@ export default {
     '用一个 warp 计算两个 32 元素向量的点积：`output[0] = a[0]·b[0] + … + a[31]·b[31]`。',
   ),
   idea: L(
-    'A warp is 32 threads that the hardware runs in lockstep, and they can read each other\'s registers directly. So `warp_sum()` adds 32 values without shared memory and without a single `barrier()`; compare Puzzle 12, which needed a shared-memory tree and a barrier after every round.',
-    'warp 是硬件同步执行的 32 个线程，它们可以直接读取彼此的寄存器。所以 `warp_sum()` 不用共享内存、也不用任何 `barrier()` 就能把 32 个值加起来；对比第 12 题，那里需要共享内存里的树形归约，每轮之后还要一次 barrier。',
+    'A warp is a group of threads the hardware schedules together: 32 on NVIDIA GPUs, 64 on most AMD GPUs (`WARP_SIZE`). A thread\'s position inside its warp is its "lane" (`lane_id()`, 0–31 here). Lanes of one warp can exchange register values directly. So `warp_sum()` adds 32 values without shared memory and without a single `barrier()`; compare Puzzle 12, which needed a shared-memory tree and a barrier after every round.',
+    'warp 是硬件一起调度的一组线程：NVIDIA GPU 上是 32 个，大多数 AMD GPU 上是 64 个（`WARP_SIZE`）。线程在自己 warp 里的位置叫 lane（`lane_id()`，这里是 0–31）。同一个 warp 的 lane 可以直接交换寄存器里的值。所以 `warp_sum()` 不用共享内存、也不用任何 `barrier()` 就能把 32 个值加起来；对比第 12 题，那里需要共享内存里的树形归约，每轮之后还要一次 barrier。',
   ),
   data: {
     launch: L('1 block of 32 threads = exactly one warp', '1 个 block，32 个线程，正好一个 warp'),
@@ -69,8 +69,8 @@ export default {
           rows: rows(sel, 1),
           arrows: lanes.filter(i => i !== sel).map(i => arrow(at('lanes', i), at('lanes', sel), 'move', true)),
           say: L(
-            `\`warp_sum()\` adds the 32 registers across the warp and gives the total to every lane, including lane ${sel} (the arrows show where its total comes from). There is no shared memory and no \`barrier()\`: the lanes already run in lockstep.`,
-            `\`warp_sum()\` 把整个 warp 的 32 个寄存器加起来，并把总和交给每一个 lane，包括 lane ${sel}（箭头表示它的总和来自哪里）。这里没有共享内存，也没有 \`barrier()\`：这些 lane 本来就是同步执行的。`,
+            `\`warp_sum()\` adds the 32 registers across the warp and gives the total to every lane, including lane ${sel} (the arrows show where its total comes from). There is no shared memory and no \`barrier()\`: \`warp_sum()\` synchronises the lanes of the warp by itself. Inside it is built from register shuffles; Puzzle 26 shows that kind of exchange step by step.`,
+            `\`warp_sum()\` 把整个 warp 的 32 个寄存器加起来，并把总和交给每一个 lane，包括 lane ${sel}（箭头表示它的总和来自哪里）。这里没有共享内存，也没有 \`barrier()\`：\`warp_sum()\` 自己会同步 warp 里的 lane。它内部是用寄存器之间的 shuffle 实现的，第 26 题会一步步展示这种交换。`,
           ),
           math: `total = ${prod.slice(0, 3).map(fmt).join(' + ')} + … + ${fmt(prod[W - 1])} = ${fmt(total)}   (0² + 1² + … + 31²)`,
         };

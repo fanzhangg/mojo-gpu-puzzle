@@ -45,7 +45,7 @@ function rows(sel, stage) {
   for (let k = 0; k <= shown; k++) {
     out.push({
       id: `L${k}`,
-      label: k === 0 ? 'shared' : L(`offset ${offsets[k - 1]}`, `偏移 ${offsets[k - 1]}`),
+      label: k === 0 ? 'shared' : L(`after offset ${offsets[k - 1]}`, `偏移 ${offsets[k - 1]} 之后`),
       kind: 'shared',
       cells: levels[k].map((v, i) => {
         const mine = feed[k].has(i);
@@ -80,7 +80,7 @@ function roundArrows(sel, k) {
 
 const round = k => ({
   name: L(`Offset ${offsets[k - 1]}`, `偏移 ${offsets[k - 1]}`),
-  lines: ['for _ in range', 'if local_i >= offset and local_i < size', 'current_val = shared[local_i - offset]', 'shared[local_i] += current_val', 'offset *= 2'],
+  lines: ['for _ in range', 'if local_i >= offset and local_i < size', 'current_val = shared[local_i - offset]', '        barrier()', 'shared[local_i] += current_val', 'offset *= 2'],
   scene(sel) {
     const off = offsets[k - 1];
     const prev = levels[k - 1];

@@ -123,14 +123,23 @@ export default function App() {
               </li>
             ))}
           </ol>
+          <p className="mt-3 hidden px-2.5 text-[11px] leading-snug text-muted-foreground lg:block">{t(UI.skipped)}</p>
         </nav>
 
         <main className="flex min-w-0 flex-1 flex-col gap-5">
           {/* puzzle header */}
           <section className="flex flex-col gap-4">
             <div>
-              <div className="text-xs font-medium uppercase tracking-wider text-run">
+              <div className="flex flex-wrap items-baseline gap-x-3 text-xs font-medium uppercase tracking-wider text-run">
                 {lang === 'zh' ? `第 ${puzzle.num} 题` : `Puzzle ${puzzle.num}`}
+                <a
+                  href={`https://puzzles.modular.com/puzzle_${String(puzzle.num).padStart(2, '0')}/puzzle_${String(puzzle.num).padStart(2, '0')}.html`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="normal-case tracking-normal text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                >
+                  {t(UI.book)} ↗
+                </a>
               </div>
               <h1 className="mt-1 text-3xl font-semibold tracking-tight">{t(puzzle.title)}{puzzle.variant && <span className="ml-3 align-middle text-lg font-normal text-muted-foreground">{t(puzzle.variant)}</span>}</h1>
               <p className="mt-2 max-w-3xl text-[15px] leading-relaxed text-muted-foreground"><Rich text={t(puzzle.goal)} /></p>

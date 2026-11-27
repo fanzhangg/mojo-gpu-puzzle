@@ -14,7 +14,7 @@ function rows(sel, stage) {
     { id: 'a', label: L('a (row)', 'a（行向量）'), kind: 'global', cols: SIZE, cells: a.map((v, j) => cell(v, j === c ? 'read' : stage === 1 ? undefined : 'muted', { idx: `0,${j}` })) },
     { id: 'b', label: L('b (column)', 'b（列向量）'), kind: 'global', cols: 1, cells: b.map((v, i) => cell(v, i === r ? 'read' : stage === 1 ? undefined : 'muted', { idx: `${i},0` })) },
     {
-      id: 'threads', label: L('threads', '线程'), kind: 'threads', cols: TB,
+      id: 'threads', label: L('threads (x,y)', '线程 (x,y)'), kind: 'threads', cols: TB,
       cells: range(TB * TB).map(t => {
         const y = Math.floor(t / TB), x = t % TB;
         if (y >= SIZE || x >= SIZE) return cell(`${x},${y}`, 'idle', { note: L('skips', '跳过') });

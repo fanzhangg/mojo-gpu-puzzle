@@ -13,19 +13,24 @@ const followed = w => w * W + 5; // follow lane 5 of the selected warp
 
 function rows(w, stage) {
   const t = followed(w);
+  const input = (id, xs) => ({
+    id, label: L(`${id} (warp ${w})`, `${id}（warp ${w}）`), kind: 'global', dense: true, cols: 8,
+    cells: range(W).map(l => { const g = w * W + l; return cell(xs[g], stage === 0 ? (g === t ? 'read' : undefined) : 'muted', { idx: String(g) }); }),
+  });
   return [
-    {
-      id: 'warps', label: L('warp sums', 'warp 部分和'), kind: 'shared',
-      cells: warpSum.map((v, k) => cell(stage >= 1 ? v : null, stage === 1 ? (k === w ? 'write' : 'focus') : stage === 2 ? 'read' : k === w ? 'focus' : 'muted', { idx: `w${k}` })),
-    },
+    input('a', a),
+    input('b', b),
     {
       id: 'threads', label: L(`warp ${w}`, `warp ${w}`), kind: 'threads', dense: true, cols: 8,
       cells: range(W).map(l => {
         const g = w * W + l;
         if (stage === 2) return cell(g, 'muted');
-        if (stage === 1) return cell(g, g === t ? 'focus' : 'active');
-        return cell(g, g === t ? 'focus' : 'active');
+        return cell(g, g === t ? 'focus' : 'active', { note: fmt(prod[g]) });
       }),
+    },
+    {
+      id: 'warps', label: L('warp sums', 'warp 部分和'), kind: 'shared',
+      cells: warpSum.map((v, k) => cell(stage >= 1 ? v : null, stage === 1 ? (k === w ? 'write' : 'focus') : stage === 2 ? 'read' : k === w ? 'focus' : 'muted', { idx: `w${k}` })),
     },
     { id: 'output', label: 'output', kind: 'global', cells: [cell(stage === 2 ? total : null, stage === 2 ? 'write' : 'muted')] },
   ];
@@ -61,10 +66,10 @@ export default {
         const t = followed(w);
         return {
           rows: rows(w, 0),
-          arrows: [],
+          arrows: range(W).flatMap(l => [arrow(at('a', l), at('threads', l), 'read', w * W + l !== t), arrow(at('b', l), at('threads', l), 'read', w * W + l !== t)]),
           say: L(
-            `All 128 threads multiply one pair each and keep the product in a register. Shown here are the 32 threads of warp ${w} (threads ${w * W}–${w * W + W - 1}); the other 3 warps do the same at the same time.`,
-            `128 个线程各算一对乘积，放在寄存器里。图中是 warp ${w} 的 32 个线程（线程 ${w * W}–${w * W + W - 1}）；另外 3 个 warp 同时做同样的事。`,
+            `All 128 threads multiply one pair each and keep the product in a register (the small number under each thread). Shown here are the 32 threads of warp ${w} (threads ${w * W}–${w * W + W - 1}); the other 3 warps do the same at the same time.`,
+            `128 个线程各算一对乘积，放在寄存器里（每个线程下面的小数字）。图中是 warp ${w} 的 32 个线程（线程 ${w * W}–${w * W + W - 1}）；另外 3 个 warp 同时做同样的事。`,
           ),
           math: `thread ${t}:  partial_product = a[${t}]·b[${t}] = ${a[t]}·${b[t]} = ${fmt(prod[t])}`,
         };
@@ -79,8 +84,8 @@ export default {
           rows: rows(w, 1),
           arrows: range(W).map(l => arrow(at('threads', l), at('warps', w), 'move', w * W + l !== t)),
           say: L(
-            `Inside \`block.sum()\`, each warp first adds its own 32 products with shuffles, like Puzzle 24. Warp ${w} produces one partial sum; every other warp produces its own at the same time.`,
-            `在 \`block.sum()\` 内部，每个 warp 先像第 24 题那样用 shuffle 把自己的 32 个乘积加起来。warp ${w} 得到一个部分和，其他 warp 同时得到各自的部分和。`,
+            `Inside \`block.sum()\`, each warp first adds its own 32 products with shuffles, like Puzzle 24. Warp ${w} produces one partial sum; every other warp produces its own at the same time. Each partial sum starts in a register of its warp; \`block.sum()\` then puts it in a shared-memory slot, because the next step has to combine values from different warps.`,
+            `在 \`block.sum()\` 内部，每个 warp 先像第 24 题那样用 shuffle 把自己的 32 个乘积加起来。warp ${w} 得到一个部分和，其他 warp 同时得到各自的部分和。部分和先在 warp 的寄存器里，随后 \`block.sum()\` 把它放进共享内存的一个位置，因为下一步要合并不同 warp 的值。`,
           ),
           math: `warp ${w}:  ${fmt(prod[w * W])} + ${fmt(prod[w * W + 1])} + … + ${fmt(prod[w * W + W - 1])} = ${fmt(warpSum[w])}`,
         };

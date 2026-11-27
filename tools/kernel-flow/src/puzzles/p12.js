@@ -39,10 +39,10 @@ function rows(sel, stage) {
     const live = k === 0 ? TPB : strides[k - 1];
     out.push({
       id: `L${k}`,
-      label: k === 0 ? 'shared' : L(`stride ${strides[k - 1]}`, `步长 ${strides[k - 1]}`),
+      label: k === 0 ? 'shared' : L(`after stride ${strides[k - 1]}`, `步长 ${strides[k - 1]} 之后`),
       kind: 'shared',
       cells: levels[k].map((v, i) => {
-        if (i >= live) return cell(null, 'muted');
+        if (i >= live) return cell(v, 'muted'); // no longer read, but the old value is still in memory
         const mine = onPath(sel, k, i);
         const tone = k === shown && stage <= 3 ? (mine ? 'write' : 'focus') : mine ? 'focus' : 'muted';
         return cell(v, tone);
@@ -68,7 +68,7 @@ function treeArrows(sel, k) {
 
 const round = k => ({
   name: L(`Stride ${strides[k - 1]}`, `步长 ${strides[k - 1]}`),
-  lines: ['while stride > 0', 'if local_i < stride', 'shared[local_i] += shared[local_i + stride]', 'stride //= 2'],
+  lines: ['while stride > 0', 'if local_i < stride', 'shared[local_i] += shared[local_i + stride]', '        barrier()', 'stride //= 2'],
   scene(sel) {
     const s = strides[k - 1];
     const me = path(sel)[k].idx, from = path(sel)[k - 1].idx;
@@ -78,8 +78,8 @@ const round = k => ({
       rows: rows(sel, k),
       arrows: treeArrows(sel, k),
       say: L(
-        `${workers.en}; threads ${s}–${TPB - 1} have nothing left to do and sit idle. A \`barrier()\` after every round makes sure the next round reads finished sums.${k === 3 ? ` After log₂ ${TPB} = 3 rounds, \`shared[0]\` holds the total.` : ''}`,
-        `${workers.zh}；线程 ${s}–${TPB - 1} 没有事做，保持空闲。每轮之后的 \`barrier()\` 确保下一轮读到的是已经加完的和。${k === 3 ? `经过 log₂ ${TPB} = 3 轮，\`shared[0]\` 里就是总和。` : ''}`,
+        `${workers.en}; threads ${s}–${TPB - 1} have nothing left to do and sit idle. A \`barrier()\` after every round makes sure the next round reads finished sums. Each row is the same \`shared\` array, updated in place; cells ${s}–${TPB - 1} are no longer read but keep their old values (grey).${k === 3 ? ` After log₂ ${TPB} = 3 rounds, \`shared[0]\` holds the total.` : ''}`,
+        `${workers.zh}；线程 ${s}–${TPB - 1} 没有事做，保持空闲。每轮之后的 \`barrier()\` 确保下一轮读到的是已经加完的和。每一行都是同一个 \`shared\` 数组被原地更新；第 ${s}–${TPB - 1} 格不再被读取，但旧值仍留在那里（灰色）。${k === 3 ? `经过 log₂ ${TPB} = 3 轮，\`shared[0]\` 里就是总和。` : ''}`,
       ),
       math: L(
         `thread ${me}:  shared[${me}] = ${fmt(prev[me])} + ${fmt(prev[me + s])} = ${fmt(levels[k][me])}${from !== me ? `\n# thread ${sel}'s product (in cell ${from}) is now part of cell ${me}` : ''}`,

@@ -83,8 +83,8 @@ export default {
     '同样是前缀和 `output[i] = a[0] + … + a[i]`，但有 15 个元素，一个 block 放不下。',
   ),
   idea: L(
-    'Threads in different blocks cannot wait for each other with `barrier()`, so the work is split into two kernel launches. Kernel 1: each block scans its own part (as in the simple version) and writes its total after the end of `output`. Kernel 2 starts only after kernel 1 has finished, so it can safely add block 0\'s total to every element of block 1.',
-    '不同 block 的线程无法用 `barrier()` 互相等待，所以计算拆成两次 kernel 启动。第 1 个 kernel：每个 block 扫描自己负责的部分（和简单版一样），并把本块的总和写在 `output` 的末尾之后。第 2 个 kernel 要等第 1 个完全结束才开始，所以可以放心地把 block 0 的总和加到 block 1 的每个元素上。',
+    'Threads in different blocks cannot wait for each other with `barrier()`, so the work is split into two kernel launches. Kernel 1: each block scans its own part (as in the simple version) and writes its total after the end of `output`. Kernel 2 starts only after kernel 1 has finished, so it can safely add block 0\'s total to every element of block 1. Note that kernel 2 adds only the previous block\'s total: that is enough for exactly 2 blocks. With 3 or more blocks, each block would need the sum of all the block totals before it.',
+    '不同 block 的线程无法用 `barrier()` 互相等待，所以计算拆成两次 kernel 启动。第 1 个 kernel：每个 block 扫描自己负责的部分（和简单版一样），并把本块的总和写在 `output` 的末尾之后。第 2 个 kernel 要等第 1 个完全结束才开始，所以可以放心地把 block 0 的总和加到 block 1 的每个元素上。注意第 2 个 kernel 只加上前一个 block 的总和，这只对正好 2 个 block 成立；有 3 个或更多 block 时，每个 block 需要的是它之前所有块和的总和。',
   ),
   data: {
     launch: L('2 blocks of 8 threads, launched twice (two kernels)', '2 个 block，每个 8 个线程，启动两次（两个 kernel）'),

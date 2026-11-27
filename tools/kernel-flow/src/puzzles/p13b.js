@@ -32,7 +32,7 @@ function rows(sel, stage) {
       }),
     },
     {
-      id: 'sa', label: 'shared_a', kind: 'shared', dense: true, groups: BLOCKS, groupLabel: g => L(`block ${g}: 8 own + 3 halo`, `block ${g}：8 个自己的 + 3 个 halo`),
+      id: 'sa', label: 'shared_a', kind: 'shared', dense: true, groups: BLOCKS, groupLabel: g => L(`block ${g}: slots 0–7 own, 8h–10h halo (h = halo)`, `block ${g}：0–7 格是自己的，8h–10h 格是 halo（h 即 halo）`),
       cells: range(BLOCKS * SLOTS).map(x => {
         const g = Math.floor(x / SLOTS), k = x % SLOTS;
         const halo = k >= TPB;
