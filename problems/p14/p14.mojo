@@ -46,6 +46,32 @@ def prefix_sum_simple[
     var local_i = thread_idx.x
     # FILL ME IN (roughly 18 lines)
 
+    var shared = stack_allocation[dtype=dtype, address_space=.SHARED](row_major[TPB]())
+
+    if global_i < size:
+        shared[local_i] = rebind[Scalar[dtype]](a[global_i])
+
+    barrier()
+
+    var offset = 1
+
+    for _ in range(Int(log2(Scalar[dtype](TPB)))):
+        var current_val: Scalar[dtype] = 0
+        if local_i >= offset and local_i < size:
+            current_val = shared[local_i - offset]
+
+        barrier()
+
+        if local_i >= offset and local_i < size:
+            shared[local_i] = shared[local_i] + current_val
+        
+        barrier()
+
+        offset *= 2
+
+    if global_i < size:
+        output[global_i] = shared[local_i]
+
 
 # ANCHOR_END: prefix_sum_simple
 
